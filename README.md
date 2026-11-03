@@ -10,7 +10,7 @@
 ![Toolchain](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fspamska%2Fifsy%2Fmain%2Frust-toolchain.toml&query=%24.toolchain.channel&style=plastic&color=orange&label=toolchain)
 ![Version](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fspamska%2Fifsy%2Fmain%2Fsys%2FCargo.toml&query=%24.package.version&style=plastic&label=version)
 ![Stars](https://img.shields.io/github/stars/spamska/ifsy?style=plastic&color=yellow)
-[![Discord](https://img.shields.io/discord/HF65J3DDKu?style=plastic&logo=discord&color=%235865f2)](https://discord.gg/HF65J3DDKu)
+[![Discord](https://img.shields.io/badge/discord-join_us-%235865F2?style=plastic&logo=discord&logoColor=white)](https://discord.gg/HF65J3DDKu)
 
 # About
 
