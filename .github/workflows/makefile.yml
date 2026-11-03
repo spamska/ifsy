@@ -15,7 +15,7 @@ jobs:
     - uses: dtolnay/rust-toolchain@stable
 
     - name: Install C toolchain
-      run: sudo apt update && sudo apt install -y clang lld xorriso mtools sgdisk
+      run: sudo apt update && sudo apt install -y clang lld xorriso mtools gdisk
 
     - name: Build kernel
       run: make
