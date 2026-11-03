@@ -14,6 +14,8 @@
 
 # About
 
+> &#9888;&#65039;&#9888;&#65039; IFSY IS STILL IN EARLY DEVELOPMENT. USE WITH CAUTION. &#9888;&#65039;&#9888;&#65039;
+
 Ifsy is a small Unix-like kernel written in Rust that brings Plan 9's elegant design philosophy to modern hardware. 
 
 It's aim is to provide a portable and modular operating system that leverages modern computing principles such as type-safety and security hardening while maintaining the simplicity and streamline of Plan 9's system call interface.
