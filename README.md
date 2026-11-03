@@ -6,6 +6,8 @@
 </p>
 
 [![BSD 2-Clause license](https://img.shields.io/badge/license-BSD--2--Clause-blue.svg?style=plastic&logo=book)](./LICENSE)
+[![Build](https://github.com/spamska/ifsy/actions/workflows/makefile.yml/badge.svg)](https://github.com/spamska/ifsy/actions/workflows/makefile.yml)
+![Toolchain](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fspamska%2Fifsy%2Fmain%2Frust-toolchain.toml&query=%24.toolchain.channel&style=plastic&color=orange&label=toolchain)
 ![Version](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fspamska%2Fifsy%2Fmain%2Fsys%2FCargo.toml&query=%24.package.version&style=plastic&label=version)
 ![Stars](https://img.shields.io/github/stars/spamska/ifsy?style=plastic&color=yellow)
 [![Discord](https://img.shields.io/discord/HF65J3DDKu?style=plastic&logo=discord&color=%235865f2)](https://discord.gg/HF65J3DDKu)
