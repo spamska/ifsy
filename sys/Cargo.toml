@@ -1,0 +1,31 @@
+[package]
+name = "ifsy-kernel"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# ext4 (lwext4, built freestanding with clang; see ./lwext4_rust).
+lwext4_rust = { path = "lwext4_rust" }
+# 4BSD scheduler (C, built freestanding; see ./sched_4bsd).
+sched-4bsd = { path = "sched_4bsd" }
+p9fcall = { path = "p9fcall" }
+log = "0.4"
+smoltcp = { version = "0.14", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "proto-dhcpv4", "proto-dns", "socket-tcp", "socket-udp", "socket-icmp", "socket-dhcpv4", "socket-dns", "auto-icmp-echo-reply"] }
+limine = "0.5"
+linked_list_allocator = { version = "0.10.5", default-features = false, features = ["use_spin"] }
+
+[features]
+verbose-boot = []
+rc-selftest = []
+
+[profile.dev]
+opt-level = 2
+overflow-checks = true
+panic = "abort"
+
+[profile.release]
+overflow-checks = true
+panic = "abort"
+lto = true
+codegen-units = 1
+strip = "symbols"

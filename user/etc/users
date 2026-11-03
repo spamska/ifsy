@@ -1,0 +1,5 @@
+# /adm/users: name:uid:home:shell   (shell - means: no login)
+# Passwords are in /adm/shadow; an account with no entry there needs none.
+root:0:/usr/root:/bin/rc
+lain:1000:/usr/lain:/bin/rc
+none:60000:/tmp:-

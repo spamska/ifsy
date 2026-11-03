@@ -1,0 +1,10 @@
+[package]
+name = "sched-4bsd"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "sched_4bsd"
+
+[build-dependencies]
+cc = "1.0"

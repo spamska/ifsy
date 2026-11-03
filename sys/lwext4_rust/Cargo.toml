@@ -1,0 +1,16 @@
+[package]
+name = "lwext4_rust"
+authors = ["Luoyuan Xiao <xiaoluoyuan@163.com>"]
+version = "0.3.0"
+edition = "2021"
+license = "GPL-2.0"
+repository = "https://github.com/elliott10/lwext4_rust"
+description = "lwext4 (ext2/3/4 in C) for freestanding Rust kernels"
+links = "lwext4"
+build = "build.rs"
+
+[dependencies]
+log = "0.4"
+
+[build-dependencies]
+cc = "1"
