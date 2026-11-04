@@ -37,6 +37,7 @@ pub struct SpinLock<T> {
     value: UnsafeCell<T>,
 }
 
+// SAFETY: the inner value is only reached through `with`, which holds the lock (IRQs saved) for the whole access, so shared references cannot race; T: Send because the value may be used from any CPU.
 unsafe impl<T: Send> Sync for SpinLock<T> {}
 
 impl<T> SpinLock<T> {
@@ -53,6 +54,7 @@ impl<T> SpinLock<T> {
         {
             core::hint::spin_loop();
         }
+        // SAFETY: the pointer is valid for the lifetime of its owner and access is exclusive (&mut self or the owning lock is held).
         let result = f(unsafe { &mut *self.value.get() });
         self.locked.store(false, Ordering::Release);
         crate::arch::irq_restore(irq);

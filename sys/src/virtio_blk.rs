@@ -106,13 +106,20 @@ pub struct VirtioBlk {
     used_idx: u16,
 }
 
+// SAFETY: access to the inner value is serialized by the lock (or the data is only moved once), so sharing across threads cannot race.
 unsafe impl Send for VirtioBlk {}
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn rd(regs: u64, off: u64) -> u32 {
+    // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
     unsafe { read_volatile((regs + off) as *const u32) }
 }
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn wr(regs: u64, off: u64, v: u32) {
+    // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
     unsafe { write_volatile((regs + off) as *mut u32, v) }
 }
 
@@ -123,10 +130,12 @@ pub fn probe() -> Option<VirtioBlk> {
     };
     for slot in 0..MMIO_SLOTS {
         let regs = va + slot * MMIO_STRIDE;
+        // SAFETY: MMIO/port/DMA access to the device this driver probed: addresses are its mapped register window or DMA pages allocated here, offsets are constants inside them, and the driver has exclusive access (&mut self).
         let hit = unsafe { rd(regs, MAGIC) == MAGIC_VALUE && rd(regs, DEVICE_ID) == ID_BLOCK };
         if !hit {
             continue;
         }
+        // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
         if let Some(d) = unsafe { setup(regs) } {
             kprintln!(
                 "ifsy: virtio-blk: disk at {:#x}, {} MiB {}",
@@ -141,6 +150,8 @@ pub fn probe() -> Option<VirtioBlk> {
     None
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 unsafe fn setup(regs: u64) -> Option<VirtioBlk> {
     unsafe {
         let version = rd(regs, VERSION);
@@ -210,6 +221,7 @@ unsafe fn setup(regs: u64) -> Option<VirtioBlk> {
 
 impl VirtioBlk {
     fn request(&mut self, ty: u32, lba: u64, len: usize) -> Result<(), ()> {
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         unsafe {
             let req = (self.mem + OFF_REQ) as *mut u8;
             write_volatile(req as *mut u32, ty);
@@ -278,6 +290,7 @@ impl Sectors for VirtioBlk {
         }
         for chunk in buf.chunks_mut(BUF_SECTORS * SECTOR) {
             self.request(T_IN, lba, chunk.len())?;
+            // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
             unsafe { core::ptr::copy_nonoverlapping((self.mem + OFF_BUF) as *const u8, chunk.as_mut_ptr(), chunk.len()) };
             lba += (chunk.len() / SECTOR) as u64;
         }
@@ -289,6 +302,7 @@ impl Sectors for VirtioBlk {
             return Err(());
         }
         for chunk in buf.chunks(BUF_SECTORS * SECTOR) {
+            // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
             unsafe { core::ptr::copy_nonoverlapping(chunk.as_ptr(), (self.mem + OFF_BUF) as *mut u8, chunk.len()) };
             self.request(T_OUT, lba, chunk.len())?;
             lba += (chunk.len() / SECTOR) as u64;

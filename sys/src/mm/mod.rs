@@ -140,12 +140,15 @@ pub fn select_heap_region(entries: &[&Entry]) -> Option<(u64, u64)> {
     Some((base, len.min(HEAP_MAX)))
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn init_heap(entries: &[&Entry], hhdm_offset: u64) -> Option<usize> {
     let (base, len) = select_heap_region(entries)?;
     HEAP_BASE.store(base, Ordering::Relaxed);
     HEAP_LEN.store(len, Ordering::Relaxed);
     let virt = base.checked_add(hhdm_offset)?;
     let len = usize::try_from(len).ok()?;
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { heap::init(virt as *mut u8, len) };
     Some(len)
 }
@@ -204,6 +207,8 @@ pub fn frame_stats() -> (u64, u64) {
     FRAMES.with(|f| (f.total_frames(), f.free_frames()))
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn init_frames(entries: &[&Entry], hhdm_offset: u64) -> Result<Range, InitError> {
     HHDM.store(hhdm_offset, Ordering::Relaxed);
     let mut usable = [Range { base: 0, len: 0 }; 128];
@@ -218,6 +223,7 @@ pub unsafe fn init_frames(entries: &[&Entry], hhdm_offset: u64) -> Result<Range,
     }
     MAX_PHYS.store(top, Ordering::Relaxed);
     let heap = [Range { base: HEAP_BASE.load(Ordering::Relaxed), len: HEAP_LEN.load(Ordering::Relaxed) }];
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     FRAMES.with(|f| unsafe { f.init(&usable[..n], &heap, hhdm_offset) })
 }
 

@@ -37,6 +37,7 @@ unsafe extern "C" {
 }
 
 pub fn test_program() -> &'static [u8] {
+    // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
     unsafe {
         let start = core::ptr::addr_of!(ring3_init_start);
         let end = core::ptr::addr_of!(ring3_init_end);

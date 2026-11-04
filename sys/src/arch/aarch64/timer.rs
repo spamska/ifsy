@@ -34,12 +34,14 @@ use core::arch::asm;
 #[inline]
 pub fn counter() -> u64 {
     let v: u64;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("isb", "mrs {}, cntpct_el0", out(reg) v, options(nomem, nostack, preserves_flags)) };
     v
 }
 
 pub fn frequency() -> (u64, bool) {
     let f: u64;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack, preserves_flags)) };
     if f == 0 { (62_500_000, false) } else { (f, true) }
 }

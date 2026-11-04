@@ -43,6 +43,7 @@ static USE_LEGACY: AtomicBool = AtomicBool::new(false);
 #[inline]
 fn sbi_call(eid: usize, fid: usize, arg0: usize) -> isize {
     let mut a0 = arg0 as isize;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe {
         asm!(
             "ecall",
@@ -59,6 +60,8 @@ fn sbi_call(eid: usize, fid: usize, arg0: usize) -> isize {
 pub struct SerialPort;
 
 impl SerialPort {
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     pub unsafe fn init() -> Self {
         Self
     }

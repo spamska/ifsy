@@ -37,7 +37,7 @@ use crate::console::color::{failed, pass, warn};
 use crate::elf::{self, ElfError};
 use crate::mm::{self, PageFlags};
 use crate::mm::aspace::Kind;
-use crate::note::{Fault, NCONT, NDFLT, NSAVE, NoteKind};
+use crate::note::{Fault, NCONT, NDFLT, NRSTR, NSAVE, NoteKind};
 use crate::sched::{self, RFMEM, RFPROC, Resume, State, Wait};
 use crate::syscall::{self, Support, dispatch_args, dispatch_user};
 use crate::timer;
@@ -861,11 +861,23 @@ fn notes(r: &mut Report) {
     sched::postnote(c, "hello", NoteKind::User);
     sched::irq_return(&mut regs);
     let save = dispatch_user(syscall::NOTED, &sys3(syscall::NOTED, NSAVE), &mut regs);
-    let still = sched::note_state(c) == Some((true, u.code + 8)) && sched::errstr_of(c).as_deref() == Some("noted: NSAVE/NRSTR not supported");
+    let saved = sched::note_state(c) == Some((false, u.code + 8));
+    let restore = dispatch_user(syscall::NOTED, &sys3(syscall::NOTED, NRSTR), &mut regs);
+    r.check(
+        "noted(NSAVE) leaves the handler; noted(NRSTR) resumes the saved frame",
+        save == 0 && saved && restore == 0 && regs.pc == u.code + 4 && sched::current() == Some(c),
+    );
+
+    let Some(u) = user_env() else { return };
+    sys(syscall::NOTIFY, u.code + 8, 0);
+    let Some(c) = spawn_user(&u) else { return r.bad("could not set up a user child") };
+    let mut regs = Ureg::entry(u.code + 4, u.top - 0x100, 0, 0);
+    sched::postnote(c, "hello", NoteKind::User);
+    sched::irq_return(&mut regs);
     dispatch_user(syscall::NOTED, &sys3(syscall::NOTED, NDFLT), &mut regs);
     r.check(
-        "noted(NSAVE) is refused; noted(NDFLT) takes the note's default action",
-        save == -1 && still && sched::current() == Some(ME) && exit_text(&u).ends_with(" hello"),
+        "noted(NDFLT) takes the note's default action",
+        sched::current() == Some(ME) && exit_text(&u).ends_with(" hello"),
     );
 
     let Some(u) = user_env() else { return };
@@ -966,7 +978,7 @@ pub fn exec_selftest() {
     let Some((h, code)) = setup else { return r.bad("exec: could not build the caller's image") };
 
     let elf_ok = crate::fs::with_root(|_| crate::fs::write_file("/exectest.elf", &pie_image())).is_some_and(|x| x.is_ok());
-    let txt_ok = crate::fs::with_root(|_| crate::fs::write_file("/exectest.txt", b"#!/bin/sh\necho hi\n")).is_some_and(|x| x.is_ok());
+    let txt_ok = crate::fs::with_root(|_| crate::fs::write_file("/exectest.txt", b"plain text, not an ELF image\n")).is_some_and(|x| x.is_ok());
     if !elf_ok || !txt_ok {
         return r.gap("exec", "skipped: could not write test files to the root file system");
     }

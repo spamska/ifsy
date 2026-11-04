@@ -77,6 +77,7 @@ struct DescriptorPointer {
 }
 
 fn tss_write_u64(offset: usize, value: u64) {
+    // SAFETY: architecture-specific privileged or MMIO access at kernel privilege, performed in the init order established by kmain.
     unsafe {
         let p = (addr_of_mut!(TSS.0) as *mut u8).add(offset) as *mut u64;
         p.write_unaligned(value);
@@ -84,6 +85,7 @@ fn tss_write_u64(offset: usize, value: u64) {
 }
 
 fn tss_read_u64(offset: usize) -> u64 {
+    // SAFETY: architecture-specific privileged or MMIO access at kernel privilege, performed in the init order established by kmain.
     unsafe {
         let p = (addr_of!(TSS.0) as *const u8).add(offset) as *const u64;
         p.read_unaligned()
@@ -102,11 +104,14 @@ fn stack_top(base: *const IstStack) -> u64 {
     base as u64 + IST_STACK_SIZE as u64
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn init() {
     let (ist1, ist2, ist3) = unsafe { (stack_top(addr_of!(IST1)), stack_top(addr_of!(IST2)), stack_top(addr_of!(IST3))) };
     tss_write_u64(TSS_IST1, ist1);
     tss_write_u64(TSS_IST1 + 8, ist2);
     tss_write_u64(TSS_IST1 + 16, ist3);
+    // SAFETY: architecture-specific privileged or MMIO access at kernel privilege, performed in the init order established by kmain.
     unsafe {
         let p = (addr_of_mut!(TSS.0) as *mut u8).add(TSS_IOMAP_BASE) as *mut u16;
         p.write_unaligned(TSS_SIZE as u16);
@@ -121,6 +126,7 @@ pub unsafe fn init() {
         | (((tss_base >> 24) & 0xff) << 56);
     let tss_high = tss_base >> 32;
 
+    // SAFETY: the pointer is valid for the lifetime of its owner and access is exclusive (&mut self or the owning lock is held).
     let gdt = unsafe { &mut *addr_of_mut!(GDT) };
     gdt.0[0] = 0;
     gdt.0[1] = 0x00af_9a00_0000_ffff;
@@ -131,6 +137,7 @@ pub unsafe fn init() {
     gdt.0[6] = tss_high;
 
     let ptr = DescriptorPointer { limit: (GDT_LEN * 8 - 1) as u16, base: addr_of!(GDT) as u64 };
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe {
         asm!("lgdt [{}]", in(reg) &ptr, options(readonly, nostack, preserves_flags));
         asm!(

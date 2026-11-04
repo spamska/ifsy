@@ -186,12 +186,18 @@ pub mod color {
 
 static CONSOLE: SpinLock<Console> = SpinLock::new(Console::new());
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn init_serial() {
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     let port = unsafe { SerialPort::init() };
     CONSOLE.with(|c| c.serial = Some(port));
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn attach_framebuffer(base: *mut u8, width: usize, height: usize, pitch: usize, bytes_per_pixel: usize) {
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     let text = unsafe { TextConsole::new(base, width, height, pitch, bytes_per_pixel) };
     CONSOLE.with(|c| c.text = Some(text));
 }

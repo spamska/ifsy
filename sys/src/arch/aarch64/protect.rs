@@ -33,10 +33,14 @@ use core::arch::asm;
 
 const SCTLR_WXN: u64 = 1 << 19;
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn init() {
     let mut sctlr: u64;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("mrs {}, sctlr_el1", out(reg) sctlr, options(nomem, nostack, preserves_flags)) };
     sctlr |= SCTLR_WXN;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe {
         asm!("msr sctlr_el1, {}", in(reg) sctlr, options(nostack, preserves_flags));
         asm!("isb", options(nostack, preserves_flags));

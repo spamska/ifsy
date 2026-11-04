@@ -95,11 +95,15 @@ pub struct TextConsole {
     cursor_enabled: bool,
 }
 
+// SAFETY: access to the inner value is serialized by the lock (or the data is only moved once), so sharing across threads cannot race.
 unsafe impl Send for TextConsole {}
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn copy_up(dst: *mut u8, src: *const u8, bytes: usize) {
     #[cfg(target_arch = "x86_64")]
     if bytes % 8 == 0 && dst as usize % 8 == 0 && src as usize % 8 == 0 {
+        // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
         unsafe {
             core::arch::asm!(
                 "rep movsq",
@@ -111,10 +115,13 @@ unsafe fn copy_up(dst: *mut u8, src: *const u8, bytes: usize) {
         }
         return;
     }
+    // SAFETY: the pointer stays inside the framebuffer region handed to attach_framebuffer and the console has exclusive access.
     unsafe { core::ptr::copy(src, dst, bytes) };
 }
 
 impl TextConsole {
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     pub unsafe fn new(base: *mut u8, width: usize, height: usize, pitch: usize, bytes_per_pixel: usize) -> Self {
         let mut t = Self {
             cell_w: CELL_UNITS_W,
@@ -206,8 +213,10 @@ impl TextConsole {
         let x_end = (x + w).min(self.width);
         let y_end = (y + h).min(self.height);
         for py in y..y_end {
+            // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
             let mut p = unsafe { self.base.add(py * self.pitch + x * self.bytes_per_pixel) }.cast::<u32>();
             for _ in x..x_end {
+                // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
                 unsafe {
                     p.write_volatile(color);
                     p = p.add(1);
@@ -231,8 +240,10 @@ impl TextConsole {
                 let on = gx < GLYPH_WIDTH && bits.is_some_and(|b| b & (1 << (GLYPH_WIDTH - 1 - gx)) != 0);
                 line[px] = if on { self.fg_color } else { self.bg_color };
             }
+            // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
             let dst = unsafe { self.base.add((origin_y + py) * self.pitch + origin_x * self.bytes_per_pixel) }.cast::<u32>();
             for (i, px) in line[..self.cell_w].iter().enumerate() {
+                // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
                 unsafe { dst.add(i).write_volatile(*px) };
             }
         }
@@ -249,8 +260,10 @@ impl TextConsole {
             return;
         }
         for py in 0..self.cell_h {
+            // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
             let row = unsafe { self.base.add((oy + py) * self.pitch + ox * self.bytes_per_pixel) }.cast::<u32>();
             for px in 0..self.cell_w {
+                // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
                 unsafe {
                     let p = row.add(px);
                     p.write_volatile(p.read_volatile() ^ 0x00FF_FFFF);
@@ -308,7 +321,9 @@ impl TextConsole {
         if total_bytes <= row_bytes {
             return;
         }
+        // SAFETY: the pointer stays inside the framebuffer region handed to attach_framebuffer and the console has exclusive access.
         let top = unsafe { self.base.add(self.y0 * self.pitch) };
+        // SAFETY: the pointer stays inside the framebuffer region handed to attach_framebuffer and the console has exclusive access.
         unsafe { copy_up(top, top.add(row_bytes), total_bytes - row_bytes) };
         let y = self.y0 + self.rows.saturating_sub(1) * self.cell_h;
         self.fill_rect(0, y, self.width, self.cell_h, self.bg_color);

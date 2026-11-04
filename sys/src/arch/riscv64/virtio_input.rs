@@ -83,11 +83,17 @@ enum State {
 
 static STATE: SpinLock<State> = SpinLock::new(State::Untried);
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn rd(regs: u64, off: usize) -> u32 {
+    // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
     unsafe { read_volatile((regs + off as u64) as *const u32) }
 }
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn wr(regs: u64, off: usize, v: u32) {
+    // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
     unsafe { write_volatile((regs + off as u64) as *mut u32, v) }
 }
 
@@ -98,12 +104,14 @@ pub fn read_byte() -> Option<u8> {
             if !mm::paging_ready() {
                 return None; // too early; try again later
             }
+            // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
             *st = match unsafe { init() } {
                 Some(k) => State::Ready(k),
                 None => State::Absent,
             };
         }
         match st {
+            // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
             State::Ready(k) => unsafe { k.poll() },
             _ => None,
         }
@@ -111,10 +119,13 @@ pub fn read_byte() -> Option<u8> {
 }
 
 /// Find the keyboard and bring it up.
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 unsafe fn init() -> Option<Kbd> {
     let va = mm::aspace::kvm::map_phys(PhysAddr(MMIO_BASE), MMIO_SLOTS, PageFlags::KERNEL_RW)?;
     for slot in 0..MMIO_SLOTS {
         let regs = va + slot * PAGE_SIZE;
+        // SAFETY: MMIO/port/DMA access to the device this driver probed: addresses are its mapped register window or DMA pages allocated here, offsets are constants inside them, and the driver has exclusive access (&mut self).
         unsafe {
             if rd(regs, MAGIC) != MAGIC_VALUE || rd(regs, DEVICE_ID) != ID_INPUT {
                 continue;
@@ -135,6 +146,8 @@ unsafe fn init() -> Option<Kbd> {
     None
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 unsafe fn setup(regs: u64) -> Option<Kbd> {
     let version = unsafe { rd(regs, VERSION) };
     if version != 1 && version != 2 {
@@ -143,6 +156,7 @@ unsafe fn setup(regs: u64) -> Option<Kbd> {
     let hhdm = mm::hhdm();
     let phys = mm::with_frames(|f| f.alloc_contiguous(3, 1))?;
     let mem = phys.0 + hhdm;
+    // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
     unsafe { core::ptr::write_bytes(mem as *mut u8, 0, 3 * PAGE_SIZE as usize) };
 
     unsafe {
@@ -218,25 +232,31 @@ unsafe fn setup(regs: u64) -> Option<Kbd> {
 
 impl Kbd {
     /// Drain finished events until one yields a character.
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe fn poll(&mut self) -> Option<u8> {
         let used = (self.mem as usize + OFF_USED) as *const u8;
         let avail = (self.mem as usize + OFF_AVAIL) as *mut u16;
         loop {
             fence(Ordering::SeqCst);
+            // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
             let idx = unsafe { read_volatile(used.add(2) as *const u16) };
             if idx == self.last_used {
                 return None;
             }
             let slot = self.last_used as usize % QSIZE;
+            // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
             let id = unsafe { read_volatile(used.add(4 + slot * 8) as *const u32) } as usize % QSIZE;
             self.last_used = self.last_used.wrapping_add(1);
 
             let ev = (self.mem as usize + OFF_EVENTS + id * EVENT_SIZE) as *const u8;
+            // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
             let (ty, code, value) = unsafe {
                 (read_volatile(ev as *const u16), read_volatile(ev.add(2) as *const u16), read_volatile(ev.add(4) as *const u32))
             };
 
             // Hand the buffer back to the device.
+            // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
             unsafe {
                 let aidx = read_volatile(avail.add(1));
                 write_volatile(avail.add(2 + aidx as usize % QSIZE), id as u16);

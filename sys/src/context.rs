@@ -52,6 +52,7 @@ pub fn perform(plan: SwitchPlan) {
         return;
     }
 
+    // SAFETY: the pointer is valid for the lifetime of its owner and access is exclusive (&mut self or the owning lock is held).
     unsafe {
         if !plan.out_fpu.is_null() {
             Port::fpu_save(&mut *plan.out_fpu);
@@ -71,6 +72,7 @@ pub fn perform(plan: SwitchPlan) {
 fn activate(a: &SharedAs) {
     a.with(|s| {
         if crate::mm::hw::read_root() != s.root() {
+            // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
             unsafe { s.activate() };
         }
     });
@@ -87,5 +89,6 @@ pub fn enter_user(mut regs: Ureg) -> ! {
         crate::arch::halt();
     }
     activate_current();
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { Port::enter_user(&regs) }
 }

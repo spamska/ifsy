@@ -43,6 +43,7 @@ pub fn kernel_root() -> PhysAddr {
 
 pub fn translation_ok() -> bool {
     let cr4: u64;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("mov {}, cr4", out(reg) cr4, options(nomem, nostack, preserves_flags)) };
     cr4 & (1 << 12) == 0
 }
@@ -50,10 +51,12 @@ pub fn translation_ok() -> bool {
 pub fn publish() {}
 
 pub fn flush_page(virt: VirtAddr) {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("invlpg [{}]", in(reg) virt.0, options(nostack, preserves_flags)) };
 }
 
 pub fn flush_all() {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe {
         let cr3: u64;
         asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags));
@@ -63,18 +66,25 @@ pub fn flush_all() {
 
 pub fn read_root() -> PhysAddr {
     let cr3: u64;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags)) };
     PhysAddr(cr3 & 0x000f_ffff_ffff_f000)
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn switch_root(root: PhysAddr, _asid: u16) {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("mov cr3, {}", in(reg) root.0, options(nostack, preserves_flags)) };
 }
 
 #[target_feature(enable = "rdrand")]
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn rdrand() -> Option<u64> {
     for _ in 0..10 {
         let mut v = 0u64;
+        // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
         if unsafe { core::arch::x86_64::_rdrand64_step(&mut v) } == 1 {
             return Some(v);
         }
@@ -83,9 +93,12 @@ unsafe fn rdrand() -> Option<u64> {
 }
 
 #[target_feature(enable = "rdseed")]
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn rdseed() -> Option<u64> {
     for _ in 0..100 {
         let mut v = 0u64;
+        // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
         if unsafe { core::arch::x86_64::_rdseed64_step(&mut v) } == 1 {
             return Some(v);
         }
@@ -94,12 +107,15 @@ unsafe fn rdseed() -> Option<u64> {
 }
 
 pub fn entropy() -> (u64, bool) {
+    // SAFETY: architecture-specific privileged or MMIO access at kernel privilege, performed in the init order established by kmain.
     let (max_leaf, has_rdrand) = unsafe {
         let l0 = __cpuid(0);
         let l1 = __cpuid(1);
         (l0.eax, l1.ecx & (1 << 30) != 0)
     };
+    // SAFETY: architecture-specific privileged or MMIO access at kernel privilege, performed in the init order established by kmain.
     let has_rdseed = max_leaf >= 7 && unsafe { __cpuid_count(7, 0).ebx } & (1 << 18) != 0;
+    // SAFETY: architecture-specific privileged or MMIO access at kernel privilege, performed in the init order established by kmain.
     unsafe {
         if has_rdseed {
             if let Some(v) = rdseed() {

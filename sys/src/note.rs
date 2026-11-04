@@ -95,13 +95,16 @@ pub struct NoteState {
     pub notified: bool,
     pub ureg_va: u64,
     pub saved_flags: u64,
+    /// Frame stashed by noted(NSAVE) for a later noted(NRSTR); 0 when none.
+    pub sv_ureg_va: u64,
+    pub sv_flags: u64,
     pub last: Option<Note>,
     pub queue: VecDeque<Note>,
 }
 
 impl NoteState {
     pub const fn new() -> Self {
-        Self { handler: 0, notified: false, ureg_va: 0, saved_flags: 0, last: None, queue: VecDeque::new() }
+        Self { handler: 0, notified: false, ureg_va: 0, saved_flags: 0, sv_ureg_va: 0, sv_flags: 0, last: None, queue: VecDeque::new() }
     }
 
     pub fn reset_for_exec(&mut self) {

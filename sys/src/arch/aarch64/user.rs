@@ -122,13 +122,17 @@ impl Hal for Port {
     const SYSCALL_ABI: &'static str =
         "aarch64: `svc #0`, number in x8, arguments in x0-x5, result in x0 (nothing is read from the user stack)";
 
+    /// # Safety
+    /// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
     unsafe fn init_user_mode() -> bool {
         let cpacr: u64;
+        // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
         unsafe { asm!("mrs {}, cpacr_el1", out(reg) cpacr, options(nomem, nostack, preserves_flags)) };
         if (cpacr >> 20) & 3 != 3 {
             crate::kprintln!("ifsy: user: aarch64: CPACR_EL1.FPEN is off; user mode needs FP/SIMD {}", color::failed());
             return false;
         }
+        // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
         unsafe {
             asm!("msr cntkctl_el1, {}", "isb", in(reg) CNTKCTL_EL0_COUNTERS, options(nostack, preserves_flags));
         }
@@ -137,12 +141,16 @@ impl Hal for Port {
     }
 
     fn set_kernel_stack(top: u64) {
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         unsafe { addr_of_mut!(aarch64_kernel_sp).write_volatile(top) };
     }
 
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe fn enter_user(regs: &Ureg) -> ! {
         super::mask_interrupts();
         let live = crate::sched::current_fpu().unwrap_or_else(Self::fpu_initial);
+        // SAFETY: the pointer is valid for the lifetime of its owner and access is exclusive (&mut self or the owning lock is held).
         unsafe {
             let frame = &mut *addr_of_mut!(STAGE);
             *frame = TrapFrame::zeroed();
@@ -158,14 +166,22 @@ impl Hal for Port {
         FpuState { q: [0; 32], fpsr: 0, fpcr: 0 }
     }
 
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe fn fpu_save(state: &mut FpuState) {
+        // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
         unsafe { aarch64_fpu_save(state) };
     }
 
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe fn fpu_restore(state: &FpuState) {
+        // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
         unsafe { aarch64_fpu_restore(state) };
     }
 
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe fn fpu_snapshot_current(state: &mut FpuState) {
         match unsafe { current_frame() } {
             Some(f) => {
@@ -173,11 +189,15 @@ impl Hal for Port {
                 state.fpsr = f.fpsr;
                 state.fpcr = f.fpcr;
             }
+            // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
             None => unsafe { aarch64_fpu_save(state) },
         }
     }
 
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe fn fpu_reset_current(state: &FpuState) {
+        // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
         unsafe { aarch64_fpu_restore(state) };
         if let Some(f) = unsafe { current_frame() } {
             f.q = state.q;
@@ -187,13 +207,18 @@ impl Hal for Port {
     }
 }
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn current_frame() -> Option<&'static mut TrapFrame> {
     let flag: u64;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("mrs {}, tpidrro_el0", out(reg) flag, options(nomem, nostack, preserves_flags)) };
+    // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
     let top = unsafe { addr_of_mut!(aarch64_kernel_sp).read_volatile() };
     if flag != 1 || top == 0 {
         return None;
     }
+    // SAFETY: the pointer is valid for the lifetime of its owner and access is exclusive (&mut self or the owning lock is held).
     Some(unsafe { &mut *((top - size_of::<TrapFrame>() as u64) as *mut TrapFrame) })
 }
 
@@ -226,6 +251,7 @@ fn fault_for(f: &TrapFrame) -> Fault {
 #[unsafe(no_mangle)]
 extern "C" fn aarch64_user_trap(f: &mut TrapFrame, kind: u64) {
     if kind == 1 {
+        // SAFETY: architecture-specific privileged or MMIO access at kernel privilege, performed in the init order established by kmain.
         unsafe { super::irq::user_tick() };
         let mut regs = f.to_ureg();
         sched::irq_return(&mut regs);

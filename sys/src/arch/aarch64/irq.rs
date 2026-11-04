@@ -49,13 +49,21 @@ const KIND_V3: u8 = 3;
 static KIND: AtomicU8 = AtomicU8::new(KIND_NONE);
 static STRAY: AtomicU32 = AtomicU32::new(0);
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn rd(addr: usize) -> u32 {
+    // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
     unsafe { read_volatile(addr as *const u32) }
 }
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn wr(addr: usize, v: u32) {
+    // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
     unsafe { write_volatile(addr as *mut u32, v) };
 }
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn gic_kind() -> u8 {
     match unsafe { (rd(GICD + 0xfe8) >> 4) & 0xf } {
         1 | 2 => KIND_V2,
@@ -64,7 +72,10 @@ unsafe fn gic_kind() -> u8 {
     }
 }
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn gicv2_enable() {
+    // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
     unsafe {
         wr(GICD, 0);
         write_volatile((GICD + 0x400 + INTID_PTIMER as usize) as *mut u8, 0x80);
@@ -75,7 +86,10 @@ unsafe fn gicv2_enable() {
     }
 }
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn gicv3_enable() -> bool {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe {
         let mut sre: u64;
         asm!("mrs {}, S3_0_C12_C12_5", out(reg) sre, options(nomem, nostack, preserves_flags));
@@ -113,27 +127,38 @@ unsafe fn gicv3_enable() -> bool {
     true
 }
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn ack() -> u32 {
     match KIND.load(Ordering::Relaxed) {
         KIND_V3 => {
             let v: u64;
+            // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
             unsafe { asm!("mrs {}, S3_0_C12_C12_0", out(reg) v, options(nomem, nostack, preserves_flags)) };
             v as u32
         }
+        // SAFETY: architecture-specific privileged or MMIO access at kernel privilege, performed in the init order established by kmain.
         _ => unsafe { rd(GICC_V2 + 0x0c) },
     }
 }
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn eoi(iar: u32) {
     match KIND.load(Ordering::Relaxed) {
+        // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
         KIND_V3 => unsafe {
             asm!("msr S3_0_C12_C12_1, {}", in(reg) iar as u64, options(nomem, nostack, preserves_flags));
         },
+        // SAFETY: architecture-specific privileged or MMIO access at kernel privilege, performed in the init order established by kmain.
         _ => unsafe { wr(GICC_V2 + 0x10, iar) },
     }
 }
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn arm(deadline: u64) {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe {
         asm!(
             "msr cntp_cval_el0, {d}",
@@ -146,13 +171,17 @@ unsafe fn arm(deadline: u64) {
     }
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn start(first_deadline: u64) -> bool {
     let kind = unsafe { gic_kind() };
     let ok = match kind {
         KIND_V2 => {
+            // SAFETY: architecture-specific privileged or MMIO access at kernel privilege, performed in the init order established by kmain.
             unsafe { gicv2_enable() };
             true
         }
+        // SAFETY: architecture-specific privileged or MMIO access at kernel privilege, performed in the init order established by kmain.
         KIND_V3 => unsafe { gicv3_enable() },
         _ => false,
     };
@@ -160,16 +189,21 @@ pub unsafe fn start(first_deadline: u64) -> bool {
         return false;
     }
     KIND.store(kind, Ordering::Relaxed);
+    // SAFETY: architecture-specific privileged or MMIO access at kernel privilege, performed in the init order established by kmain.
     unsafe { arm(first_deadline) };
     true
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn stop() {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("msr cntp_ctl_el0, xzr", "isb", options(nomem, nostack, preserves_flags)) };
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn aarch64_irq_handler() {
+    // SAFETY: architecture-specific privileged or MMIO access at kernel privilege, performed in the init order established by kmain.
     let iar = unsafe { ack() };
     let intid = iar & 0x3ff;
     if intid == INTID_SPURIOUS {
@@ -177,17 +211,22 @@ unsafe extern "C" fn aarch64_irq_handler() {
     }
     if intid == INTID_PTIMER {
         let next = crate::timer::irq();
+        // SAFETY: architecture-specific privileged or MMIO access at kernel privilege, performed in the init order established by kmain.
         unsafe { arm(next) };
     } else {
         STRAY.fetch_add(1, Ordering::Relaxed);
     }
+    // SAFETY: architecture-specific privileged or MMIO access at kernel privilege, performed in the init order established by kmain.
     unsafe { eoi(iar) };
     if intid == INTID_PTIMER {
         crate::sched::preempt();
     }
 }
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 pub unsafe fn user_tick() {
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { aarch64_irq_handler() };
 }
 

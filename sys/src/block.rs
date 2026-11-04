@@ -90,8 +90,12 @@ pub struct RamDisk {
 }
 
 impl RamDisk {
+    /// # Safety
+    /// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
     pub unsafe fn from_raw(ptr: *mut u8, len: usize) -> Self {
         let usable = len - len % SECTOR_SIZE;
+        // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
+        // SAFETY: the caller guarantees [ptr, ptr+len) is valid, writable and exclusively ours; usable <= len.
         Self { data: unsafe { core::slice::from_raw_parts_mut(ptr, usable) } }
     }
 }

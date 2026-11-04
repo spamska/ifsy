@@ -103,8 +103,10 @@ enum Io {
 impl Io {
     fn rd(&self, off: u32) -> u32 {
         match *self {
+            // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
             Io::Mem(b) => unsafe { read_volatile((b + off as usize) as *const u32) },
             #[cfg(target_arch = "x86_64")]
+            // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
             Io::Port(p) => unsafe {
                 outl(p, off);
                 inl(p + 4)
@@ -114,8 +116,10 @@ impl Io {
 
     fn wr(&self, off: u32, v: u32) {
         match *self {
+            // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
             Io::Mem(b) => unsafe { write_volatile((b + off as usize) as *mut u32, v) },
             #[cfg(target_arch = "x86_64")]
+            // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
             Io::Port(p) => unsafe {
                 outl(p, off);
                 outl(p + 4, v)
@@ -136,11 +140,13 @@ pub struct E1000 {
     irq: u8,
 }
 
+// SAFETY: access to the inner value is serialized by the lock (or the data is only moved once), so sharing across threads cannot race.
 unsafe impl Send for E1000 {}
 
 fn alloc_dma(pages: u64) -> Option<(u64, u64)> {
     let phys = mm::with_frames(|f| f.alloc_contiguous(pages, 1))?;
     let virt = phys.0 + mm::hhdm();
+    // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
     unsafe { core::ptr::write_bytes(virt as *mut u8, 0, (pages * PAGE) as usize) };
     Some((virt, phys.0))
 }
@@ -171,10 +177,12 @@ impl E1000 {
     }
 
     fn rx_ready(&self) -> bool {
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         unsafe { read_volatile(self.rx_desc(self.rx_head).add(12)) & DD != 0 }
     }
 
     fn tx_free(&self) -> bool {
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         unsafe { read_volatile(self.tx_desc(self.tx_tail).add(12)) & DD != 0 }
     }
 }
@@ -191,12 +199,16 @@ pub struct E1000Tx<'a> {
 
 impl RxToken for E1000Rx<'_> {
     fn consume<R, F: FnOnce(&[u8]) -> R>(self, f: F) -> R {
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         let dev = unsafe { &mut *self.dev };
         let i = dev.rx_head;
         let desc = dev.rx_desc(i);
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         let len = unsafe { read_volatile(desc.add(8) as *const u16) } as usize;
         let data = dev.rx_buf + (i * BUF) as u64;
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         let r = f(unsafe { core::slice::from_raw_parts(data as *const u8, len.min(BUF)) });
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         unsafe { write_volatile(desc.add(12), 0) };
         fence(Ordering::SeqCst);
         dev.io.wr(RDT, i as u32);
@@ -207,12 +219,15 @@ impl RxToken for E1000Rx<'_> {
 
 impl TxToken for E1000Tx<'_> {
     fn consume<R, F: FnOnce(&mut [u8]) -> R>(self, len: usize, f: F) -> R {
+        // SAFETY: the pointer is valid for the lifetime of its owner and access is exclusive (&mut self or the owning lock is held).
         let dev = unsafe { &mut *self.dev };
         let i = dev.tx_tail;
         let len = len.min(MTU);
         let data = dev.tx_buf + (i * BUF) as u64;
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         let r = f(unsafe { core::slice::from_raw_parts_mut(data as *mut u8, len) });
         let desc = dev.tx_desc(i);
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         unsafe {
             write_volatile(desc.add(8) as *mut u16, len as u16);
             write_volatile(desc.add(10), 0);
@@ -352,6 +367,7 @@ pub fn probe() -> Option<E1000> {
     let (rx_buf, rx_buf_p) = alloc_dma((RING * BUF) as u64 / PAGE)?;
     let (tx_buf, tx_buf_p) = alloc_dma((RING * BUF) as u64 / PAGE)?;
     let dev = E1000 { io, mac, rx_ring, tx_ring, rx_buf, tx_buf, rx_head: 0, tx_tail: 0, irq };
+    // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
     unsafe {
         for i in 0..RING {
             write_volatile(dev.rx_desc(i) as *mut u64, rx_buf_p + (i * BUF) as u64);

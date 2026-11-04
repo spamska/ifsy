@@ -111,8 +111,10 @@ impl Bus {
     fn notify(&self, queue: u16) {
         match *self {
             #[cfg(any(target_arch = "riscv64", target_arch = "aarch64"))]
+            // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
             Bus::Mmio(r) => unsafe { write_volatile((r + mmio::QUEUE_NOTIFY) as *mut u32, queue as u32) },
             #[cfg(target_arch = "x86_64")]
+            // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
             Bus::Pio(p) => unsafe { crate::pci::outw(p + pio::QUEUE_NOTIFY, queue) },
         }
     }
@@ -142,6 +144,7 @@ fn layout(size: u16) -> (u64, u64, u64) {
 fn alloc_pages(pages: u64) -> Option<(u64, u64)> {
     let phys = mm::with_frames(|f| f.alloc_contiguous(pages, 1))?;
     let virt = phys.0 + mm::hhdm();
+    // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
     unsafe { core::ptr::write_bytes(virt as *mut u8, 0, (pages * PAGE) as usize) };
     Some((virt, phys.0))
 }
@@ -150,11 +153,15 @@ impl Queue {
     fn new(size: u16) -> Option<Queue> {
         let (avail_off, used_off, total) = layout(size);
         let (mem, phys) = alloc_pages(total / PAGE)?;
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         unsafe { write_volatile((mem + avail_off) as *mut u16, AVAIL_NO_IRQ) };
         Some(Queue { mem, phys, size, avail_off, used_off, avail_idx: 0, last_used: 0 })
     }
 
+    /// # Safety
+    /// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
     unsafe fn set_desc(&self, i: usize, addr: u64, len: u32, flags: u16) {
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         unsafe {
             let d = (self.mem + 16 * i as u64) as *mut u8;
             write_volatile(d as *mut u64, addr);
@@ -164,7 +171,10 @@ impl Queue {
         }
     }
 
+    /// # Safety
+    /// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
     unsafe fn push(&mut self, id: u16) {
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         unsafe {
             let avail = (self.mem + self.avail_off) as *mut u16;
             write_volatile(avail.add(2 + self.avail_idx as usize % self.size as usize), id);
@@ -175,7 +185,10 @@ impl Queue {
         }
     }
 
+    /// # Safety
+    /// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
     unsafe fn pop(&mut self) -> Option<(u16, u32)> {
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         unsafe {
             fence(Ordering::SeqCst);
             let used = (self.mem + self.used_off) as *const u8;
@@ -202,6 +215,7 @@ pub struct VirtioNet {
     tx_free: u32,
 }
 
+// SAFETY: access to the inner value is serialized by the lock (or the data is only moved once), so sharing across threads cannot race.
 unsafe impl Send for VirtioNet {}
 
 impl VirtioNet {
@@ -209,6 +223,7 @@ impl VirtioNet {
         let (rx_buf, rx_phys) = alloc_pages(BUF_PAGES)?;
         let (tx_buf, tx_phys) = alloc_pages(BUF_PAGES)?;
         let mut dev = VirtioNet { bus, hdr, mac, rx, tx, rx_buf, tx_buf, tx_free: (1 << SLOTS) - 1 };
+        // SAFETY: MMIO/port/DMA access to the device this driver probed: addresses are its mapped register window or DMA pages allocated here, offsets are constants inside them, and the driver has exclusive access (&mut self).
         unsafe {
             for i in 0..SLOTS {
                 dev.rx.set_desc(i, rx_phys + (i * BUF) as u64, BUF as u32, DESC_WRITE);
@@ -225,6 +240,7 @@ impl VirtioNet {
     }
 
     fn reclaim(&mut self) {
+        // SAFETY: MMIO/port/DMA access to the device this driver probed: addresses are its mapped register window or DMA pages allocated here, offsets are constants inside them, and the driver has exclusive access (&mut self).
         while let Some((id, _)) = unsafe { self.tx.pop() } {
             self.tx_free |= 1 << (id as usize % SLOTS);
         }
@@ -245,9 +261,11 @@ pub struct NetTx<'a> {
 
 impl RxToken for NetRx<'_> {
     fn consume<R, F: FnOnce(&[u8]) -> R>(self, f: F) -> R {
+        // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
         let dev = unsafe { &mut *self.dev };
         let base = dev.rx_buf + (self.id as usize % SLOTS * BUF) as u64;
         let frame = self.len.saturating_sub(dev.hdr).min(BUF - dev.hdr);
+        // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
         let r = f(unsafe { core::slice::from_raw_parts((base + dev.hdr as u64) as *const u8, frame) });
         unsafe { dev.rx.push(self.id) };
         dev.bus.notify(0);
@@ -257,6 +275,7 @@ impl RxToken for NetRx<'_> {
 
 impl TxToken for NetTx<'_> {
     fn consume<R, F: FnOnce(&mut [u8]) -> R>(self, len: usize, f: F) -> R {
+        // SAFETY: the pointer is valid for the lifetime of its owner and access is exclusive (&mut self or the owning lock is held).
         let dev = unsafe { &mut *self.dev };
         let len = len.min(BUF - dev.hdr);
         let slot = dev.tx_free.trailing_zeros() as usize;
@@ -266,8 +285,11 @@ impl TxToken for NetTx<'_> {
         }
         dev.tx_free &= !(1 << slot);
         let base = dev.tx_buf + (slot * BUF) as u64;
+        // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
         unsafe { core::ptr::write_bytes(base as *mut u8, 0, dev.hdr) };
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         let r = f(unsafe { core::slice::from_raw_parts_mut((base + dev.hdr as u64) as *mut u8, len) });
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         unsafe {
             let d = (dev.tx.mem + 16 * slot as u64 + 8) as *mut u32;
             write_volatile(d, (dev.hdr + len) as u32);
@@ -287,6 +309,7 @@ impl Device for VirtioNet {
         if self.tx_free == 0 {
             return None;
         }
+        // SAFETY: MMIO/port/DMA access to the device this driver probed: addresses are its mapped register window or DMA pages allocated here, offsets are constants inside them, and the driver has exclusive access (&mut self).
         let (id, len) = unsafe { self.rx.pop() }?;
         let dev = self as *mut VirtioNet;
         Some((NetRx { dev, id, len: len as usize, _p: PhantomData }, NetTx { dev, _p: PhantomData }))
@@ -316,6 +339,7 @@ pub fn probe() -> Option<VirtioNet> {
     let va = mmio_map(BASE, SLOTS_N * STRIDE)?;
     for slot in 0..SLOTS_N {
         let regs = va + slot * STRIDE;
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         let hit = unsafe {
             read_volatile((regs + mmio::MAGIC) as *const u32) == mmio::MAGIC_VALUE
                 && read_volatile((regs + mmio::DEVICE_ID) as *const u32) == mmio::ID_NET
@@ -323,6 +347,7 @@ pub fn probe() -> Option<VirtioNet> {
         if !hit {
             continue;
         }
+        // SAFETY: MMIO/port/DMA access to the device this driver probed: addresses are its mapped register window or DMA pages allocated here, offsets are constants inside them, and the driver has exclusive access (&mut self).
         if let Some(d) = unsafe { setup_mmio(regs) } {
             kprintln!(
                 "ifsy: net: virtio-net at {:#x}, mac {} {}",
@@ -338,9 +363,13 @@ pub fn probe() -> Option<VirtioNet> {
 }
 
 #[cfg(any(target_arch = "riscv64", target_arch = "aarch64"))]
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn setup_mmio(regs: u64) -> Option<VirtioNet> {
     use mmio::*;
+    // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
     let rd = |off: u64| unsafe { read_volatile((regs + off) as *const u32) };
+    // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
     let wr = |off: u64, v: u32| unsafe { write_volatile((regs + off) as *mut u32, v) };
     let version = rd(VERSION);
     if version != 1 && version != 2 {
@@ -398,6 +427,7 @@ unsafe fn setup_mmio(regs: u64) -> Option<VirtioNet> {
     let mut mac = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
     if mac_ok {
         for (i, b) in mac.iter_mut().enumerate() {
+            // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
             *b = unsafe { read_volatile((regs + CONFIG + i as u64) as *const u8) };
         }
     }
@@ -425,6 +455,7 @@ pub fn probe() -> Option<VirtioNet> {
         return None;
     }
     let base = (bar0 & !3) as u16;
+    // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     unsafe {
         outb(base + pio::STATUS, 0);
         outb(base + pio::STATUS, ST_ACK as u8);

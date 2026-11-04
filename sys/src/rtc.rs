@@ -48,6 +48,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 #[cfg(target_arch = "x86_64")]
 fn cmos(reg: u8) -> u8 {
     let v: u8;
+    // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     unsafe {
         core::arch::asm!("out dx, al", in("dx") 0x70u16, in("al") reg, options(nomem, nostack, preserves_flags));
         core::arch::asm!("in al, dx", in("dx") 0x71u16, out("al") v, options(nomem, nostack, preserves_flags));

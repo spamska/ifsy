@@ -58,6 +58,7 @@ const MAX_PATH: usize = 1024;
 const OWRITE: u64 = 1;
 const ORDWR: u64 = 2;
 const OTRUNC: u64 = 0x10;
+const OCEXEC: u64 = 0x20;
 
 const LW_CREATE_TRUNC: u32 = 0x241;
 
@@ -65,6 +66,54 @@ pub struct FileObj {
     path: String,
     pos: SpinLock<u64>,
     access: u8,
+    /// This open holds the exclusive-use lock of a DMEXCL file.
+    excl: bool,
+}
+
+/// Paths marked DMEXCL (exclusive use) and the subset that is currently open.
+static EXCL_MARKED: SpinLock<alloc::collections::BTreeSet<String>> = SpinLock::new(alloc::collections::BTreeSet::new());
+static EXCL_OPEN: SpinLock<alloc::collections::BTreeSet<String>> = SpinLock::new(alloc::collections::BTreeSet::new());
+
+fn is_excl(path: &str) -> bool {
+    EXCL_MARKED.with(|m| m.contains(path))
+}
+
+fn excl_set(path: &str, on: bool) {
+    EXCL_MARKED.with(|m| {
+        if on {
+            m.insert(path.to_string());
+        } else {
+            m.remove(path);
+        }
+    });
+}
+
+fn excl_forget(path: &str) {
+    EXCL_MARKED.with(|m| m.remove(path));
+}
+
+fn excl_rename(from: &str, to: &str) {
+    let moved = EXCL_MARKED.with(|m| m.remove(from));
+    if moved {
+        EXCL_MARKED.with(|m| m.insert(to.to_string()));
+    }
+    let open = EXCL_OPEN.with(|o| o.remove(from));
+    if open {
+        EXCL_OPEN.with(|o| o.insert(to.to_string()));
+    }
+}
+
+/// Take the exclusive-use lock for `path`; false when another open holds it.
+fn excl_acquire(path: &str) -> bool {
+    EXCL_OPEN.with(|o| o.insert(path.to_string()))
+}
+
+impl Drop for FileObj {
+    fn drop(&mut self) {
+        if self.excl {
+            EXCL_OPEN.with(|o| o.remove(&self.path));
+        }
+    }
 }
 
 pub struct ConsCtl;
@@ -163,15 +212,17 @@ pub enum Chan {
 pub struct FdTable {
     slots: Vec<Option<Chan>>,
     cwd: String,
+    /// Descriptors opened with OCEXEC; closed by exec.
+    cexec: alloc::collections::BTreeSet<usize>,
 }
 
 impl FdTable {
     pub fn stdio() -> Self {
-        Self { slots: vec![Some(Chan::Console), Some(Chan::Console), Some(Chan::Console)], cwd: String::from("/") }
+        Self { slots: vec![Some(Chan::Console), Some(Chan::Console), Some(Chan::Console)], cwd: String::from("/"), cexec: alloc::collections::BTreeSet::new() }
     }
 
     pub fn closed() -> Self {
-        Self { slots: Vec::new(), cwd: String::from("/") }
+        Self { slots: Vec::new(), cwd: String::from("/"), cexec: alloc::collections::BTreeSet::new() }
     }
 
     fn get(&self, fd: u64) -> Option<Chan> {
@@ -181,13 +232,16 @@ impl FdTable {
     fn alloc(&mut self, chan: Chan) -> Option<usize> {
         if let Some(i) = self.slots.iter().position(Option::is_none) {
             self.slots[i] = Some(chan);
+            self.cexec.remove(&i);
             return Some(i);
         }
         if self.slots.len() >= MAX_FDS {
             return None;
         }
         self.slots.push(Some(chan));
-        Some(self.slots.len() - 1)
+        let i = self.slots.len() - 1;
+        self.cexec.remove(&i);
+        Some(i)
     }
 
     fn set(&mut self, fd: usize, chan: Chan) -> bool {
@@ -198,6 +252,7 @@ impl FdTable {
             self.slots.resize(fd + 1, None);
         }
         self.slots[fd] = Some(chan);
+        self.cexec.remove(&fd);
         true
     }
 
@@ -205,6 +260,7 @@ impl FdTable {
         match usize::try_from(fd).ok().and_then(|i| self.slots.get_mut(i)) {
             Some(slot) if slot.is_some() => {
                 *slot = None;
+                self.cexec.remove(&(fd as usize));
                 true
             }
             _ => false,
@@ -513,6 +569,7 @@ fn fsctl_write(o: &FsCtlObj, buf: u64, n: u64) -> i64 {
                     return fail("bad file name");
                 };
                 fs::with_root(|_| {
+                    // SAFETY: FFI/union access: the C call gets valid NUL-terminated or sized buffers owned by this frame, and the union field read matches the message type just checked.
                     let r = unsafe { lwext4_rust::bindings::ext4_flink(a.as_ptr(), b.as_ptr()) };
                     if r == 0 { Ok(()) } else { Err(p9::errno_msg(r)) }
                 })
@@ -725,6 +782,7 @@ fn stat_path(path: &str) -> Result<Stat, &'static str> {
     let mtime = fs::with_root(|_| Ext4File::new(path, InodeTypes::EXT4_DE_REG_FILE).file_mtime_get().unwrap_or(0))
         .unwrap_or(0);
     let length = if kind == Kind::File { ext4_size(path).unwrap_or(0) } else { 0 };
+    let perm = if kind == Kind::File && is_excl(path) { perm | p9::DMEXCL } else { perm };
     Ok(Stat {
         name: p9::base_name(path).to_string(),
         is_dir: kind == Kind::Dir,
@@ -769,6 +827,9 @@ fn ext4_write(path: &str, off: u64, data: &[u8]) -> Result<usize, &'static str> 
         let mut f = Ext4File::new(path, InodeTypes::EXT4_DE_REG_FILE);
         f.file_open(path, O_RDWR).map_err(p9::errno_msg)?;
         let r = (|| -> Result<usize, &'static str> {
+            if off > i64::MAX as u64 {
+                return Err("bad offset");
+            }
             f.file_seek(off as i64, 0).map_err(p9::errno_msg)?;
             let mut done = 0;
             while done < data.len() {
@@ -1099,7 +1160,11 @@ fn open_chan(raw: &str, mode: u64) -> Result<Chan, &'static str> {
                 2 => 2,
                 _ => 0,
             };
-            Ok(Chan::File(Arc::new(FileObj { path, pos: SpinLock::new(0), access })))
+            let excl = is_excl(&path);
+            if excl && !excl_acquire(&path) {
+                return Err("exclusive use file already open");
+            }
+            Ok(Chan::File(Arc::new(FileObj { path, pos: SpinLock::new(0), access, excl })))
         }
     }
 }
@@ -1413,6 +1478,30 @@ pub fn install(chan: Chan) -> i64 {
     }
 }
 
+/// Install `chan` and, when `cexec` is set, mark the descriptor to be closed by exec.
+fn install_cexec(chan: Chan, cexec: bool) -> i64 {
+    let fd = install(chan);
+    if fd >= 0 && cexec {
+        if let Some(fds) = sched::current_fds() {
+            fds.with(|t| t.cexec.insert(fd as usize));
+        }
+    }
+    fd
+}
+
+/// Close every descriptor opened with OCEXEC; called when exec succeeds.
+pub fn close_on_exec() {
+    if let Some(fds) = sched::current_fds() {
+        fds.with(|t| {
+            let marked: Vec<usize> = t.cexec.iter().copied().collect();
+            for fd in marked {
+                t.close(fd as u64);
+            }
+            t.cexec.clear();
+        });
+    }
+}
+
 pub fn user_name(ptr: u64) -> Option<String> {
     sched::cstr_from_user(ptr, MAX_PATH)
 }
@@ -1420,7 +1509,7 @@ pub fn user_name(ptr: u64) -> Option<String> {
 pub fn sys_open(path_ptr: u64, mode: u64) -> i64 {
     let Some(raw) = user_name(path_ptr) else { return fail("bad address in system call") };
     match open_chan(&raw, mode) {
-        Ok(c) => install(c),
+        Ok(c) => install_cexec(c, mode & OCEXEC != 0),
         Err(m) => fail(m),
     }
 }
@@ -1434,7 +1523,7 @@ pub fn sys_create(path_ptr: u64, mode: u64, perm: u64) -> i64 {
     if mntfs::is_remote(&path) {
         let (parent, name) = remote_split(&path);
         return match mntfs::create(&parent, &name, mode, perm as u32) {
-            Ok(c) => install(c),
+            Ok(c) => install_cexec(c, mode & OCEXEC != 0),
             Err(m) => fail(m),
         };
     }
@@ -1480,9 +1569,16 @@ pub fn sys_create(path_ptr: u64, mode: u64, perm: u64) -> i64 {
             2 => 2,
             _ => 0,
         };
-        Chan::File(Arc::new(FileObj { path, pos: SpinLock::new(0), access }))
+        let excl = perm & p9::DMEXCL != 0;
+        if excl {
+            excl_set(&path, true);
+            excl_acquire(&path);
+        } else {
+            excl_forget(&path);
+        }
+        Chan::File(Arc::new(FileObj { path, pos: SpinLock::new(0), access, excl }))
     };
-    install(chan)
+    install_cexec(chan, mode & OCEXEC != 0)
 }
 
 pub fn sys_close(fd: u64) -> i64 {
@@ -1699,7 +1795,10 @@ pub fn sys_remove(path_ptr: u64) -> i64 {
         },
     };
     match r {
-        Ok(()) => 0,
+        Ok(()) => {
+            excl_forget(&path);
+            0
+        }
         Err(m) => fail(m),
     }
 }
@@ -1748,10 +1847,26 @@ fn apply_wstat(path: &str, w: &WStat) -> Result<(), &'static str> {
     if w.length != u64::MAX {
         let cur = if kind == Kind::File { ext4_size(path).unwrap_or(0) } else { 0 };
         if w.length != cur {
-            return Err("cannot change length");
+            if kind != Kind::File {
+                return Err("cannot change length");
+            }
+            if w.length > i64::MAX as u64 {
+                return Err("bad stat buffer");
+            }
+            fs::with_root(|_| {
+                let mut f = Ext4File::new(path, InodeTypes::EXT4_DE_REG_FILE);
+                f.file_open(path, O_RDWR).map_err(p9::errno_msg)?;
+                let r = f.file_truncate(w.length).map(|_| ()).map_err(p9::errno_msg);
+                let _ = f.file_close();
+                r
+            })
+            .unwrap_or(Err("no file system"))?;
         }
     }
     if w.mode != u32::MAX {
+        if kind == Kind::File {
+            excl_set(path, w.mode & p9::DMEXCL != 0);
+        }
         let perm = w.mode & 0o777;
         fs::with_root(|_| {
             let mut f = Ext4File::new(path, InodeTypes::EXT4_DE_REG_FILE);
@@ -1762,6 +1877,7 @@ fn apply_wstat(path: &str, w: &WStat) -> Result<(), &'static str> {
     if w.mtime != u32::MAX {
         let c = alloc::ffi::CString::new(path).map_err(|_| "bad file name")?;
         let r = fs::with_root(|_| {
+            // SAFETY: FFI/union access: the C call gets valid NUL-terminated or sized buffers owned by this frame, and the union field read matches the message type just checked.
             unsafe { lwext4_rust::bindings::ext4_mtime_set(c.as_ptr(), w.mtime) }
         })
         .ok_or("no file system")?;
@@ -1786,6 +1902,7 @@ fn apply_wstat(path: &str, w: &WStat) -> Result<(), &'static str> {
             f.file_rename(path, &to).map(|_| ()).map_err(p9::errno_msg)
         })
         .unwrap_or(Err("no file system"))?;
+        excl_rename(path, &to);
     }
     Ok(())
 }
@@ -1850,7 +1967,7 @@ fn old_dir(st: &Stat) -> [u8; OLD_DIRLEN] {
     }
     let chdir: u32 = if st.is_dir { 0x8000_0000 } else { 0 };
     let qpath = (st.qid_path as u32 & 0x7fff_ffff) | chdir;
-    let mode = (st.perm & 0o777) | chdir;
+    let mode = (st.perm & (0o777 | p9::DMEXCL)) | chdir;
     d[84..88].copy_from_slice(&qpath.to_le_bytes());
     d[88..92].copy_from_slice(&0u32.to_le_bytes());
     d[92..96].copy_from_slice(&mode.to_le_bytes());

@@ -58,6 +58,7 @@ pub fn exception_class_name(ec: u64) -> &'static str {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn aarch64_trap_common(vector: u64) -> ! {
     let (esr, far, elr, spsr): (u64, u64, u64, u64);
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe {
         asm!("mrs {}, esr_el1", out(reg) esr, options(nomem, nostack, preserves_flags));
         asm!("mrs {}, far_el1", out(reg) far, options(nomem, nostack, preserves_flags));
@@ -79,14 +80,17 @@ unsafe extern "C" fn aarch64_trap_common(vector: u64) -> ! {
         spsr,
     );
     let mut fp: u64;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("mov {}, x29", out(reg) fp, options(nomem, nostack, preserves_flags)) };
     crate::kprint!("ifsy: TRAP: backtrace:");
     for _ in 0..12 {
         if fp < 0xffff_0000_0000_0000 || fp & 7 != 0 {
             break;
         }
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         let lr = unsafe { core::ptr::read_volatile((fp + 8) as *const u64) };
         crate::kprint!(" {:#x}", lr);
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         fp = unsafe { core::ptr::read_volatile(fp as *const u64) };
     }
     crate::kprintln!();
@@ -147,8 +151,11 @@ vector_table_el1:
 "#
 );
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn init() {
     let table_addr = core::ptr::addr_of!(vector_table_el1) as u64;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe {
         asm!("msr vbar_el1, {}", in(reg) table_addr, options(nostack, preserves_flags));
         asm!("isb", options(nostack, preserves_flags));

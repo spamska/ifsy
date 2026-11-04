@@ -113,21 +113,16 @@ pub enum Support {
 pub fn support(number: u32) -> Support {
     match number {
         SYSR1 | SLEEP | NSEC | EXITS | _WAIT | AWAIT | RENDEZVOUS | ERRSTR | _ERRSTR | SEMACQUIRE | TSEMACQUIRE
-        | SEMRELEASE | ALARM | NOTIFY | SEGFLUSH => Support::Full,
-        _FSESSION => Support::Partial("obsolete since 9P2000; fails with an error string"),
-        BIND | UNMOUNT => Support::Partial("path-keyed per-thread namespace: replace, before/after unions, MCREATE; unmount matches by source name; no MCACHE"),
+        | SEMRELEASE | ALARM | NOTIFY | SEGFLUSH | NOTED | _FSESSION | BIND | UNMOUNT | BRK_ | SEGBRK | _READ | PREAD | _WRITE | PWRITE | OPEN | CREATE
+        | EXEC | CLOSE | DUP | PIPE | CHDIR | SEEK | STAT | FSTAT | FD2PATH | REMOVE | OSEEK | _STAT | _FSTAT => Support::Full,
         MOUNT | _MOUNT => Support::Partial("9P2000 over a bidirectional pipe, ported from devmnt.c; no cache or read-ahead; clunks of closed files are sent before the next RPC"),
         FAUTH | FVERSION => Support::Partial("9P2000 over a bidirectional pipe, ported from devmnt.c; no authentication protocol is run"),
         SEGATTACH => Support::Partial("classes memory, shared and named shared segments; no physical, image or device classes"),
         SEGDETACH | SEGFREE => Support::Partial("attached segments only; the image, heap and stack cannot be detached or freed"),
-        RFORK => Support::Partial("RFPROC, RFMEM, RFNOWAIT, RFFDG, RFNAMEG and RFCNAMEG act; env, note-group, rendezvous and RFCFDG flags are ignored"),
-        _READ | PREAD | _WRITE | PWRITE | OPEN | CREATE | CLOSE | DUP | PIPE | CHDIR | SEEK | STAT | FSTAT
-        | FD2PATH | REMOVE | WSTAT | FWSTAT | OSEEK | _STAT | _FSTAT | _WSTAT | _FWSTAT => Support::Partial(
-            "ext4 files and directories, /dev/{cons,null,zero,pid,sysname,osinfo,time,swap,fsinfo,ps}, pipes; mounted 9P trees; wstat sets only mtime, mode and name on local files; no file locking",
+        RFORK => Support::Partial("all Plan 9 flags are validated; RFPROC, RFMEM, RFNOWAIT, RFFDG, RFCFDG, RFNAMEG, RFCNAMEG, RFREND act, RFNOTEG only records the note group; RFENVG/RFCENVG/RFNOMNT are accepted (no per-process env or mount restriction yet)"),
+        WSTAT | FWSTAT | _WSTAT | _FWSTAT => Support::Partial(
+            "sets mode (incl. DMEXCL), mtime, name and length on local files and forwards to 9P servers; uid and gid cannot be changed",
         ),
-        EXEC => Support::Partial("ELF64 static/static-PIE from the root fs; no #! scripts; descriptors stay open; the new image runs in user mode where the port has it (x86_64)"),
-        NOTED => Support::Partial("NCONT and NDFLT; NSAVE/NRSTR are refused; needs dispatch_user (the register block)"),
-        BRK_ | SEGBRK => Support::Partial("heap segment only"),
         _ => Support::Missing,
     }
 }
@@ -195,7 +190,7 @@ pub fn dispatch_args(number: u32, args: &Args) -> i64 {
         WSTAT => crate::io::sys_wstat(args[0], args[1], args[2]),
         FWSTAT => crate::io::sys_fwstat(args[0], args[1], args[2]),
         BRK_ => sched::sys_brk(args[0], false),
-        SEGBRK => sched::sys_brk(args[1], true),
+        SEGBRK => sched::sys_segbrk(args[0], args[1]),
         _ERRSTR => sched::sys_errstr(args[0], 64),
         ERRSTR => sched::sys_errstr(args[0], args[1]),
         SEMACQUIRE => sched::sys_semacquire(

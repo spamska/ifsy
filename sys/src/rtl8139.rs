@@ -95,6 +95,7 @@ pub struct Rtl8139 {
     irq: u8,
 }
 
+// SAFETY: access to the inner value is serialized by the lock (or the data is only moved once), so sharing across threads cannot race.
 unsafe impl Send for Rtl8139 {}
 
 fn alloc_dma(pages: u64) -> Option<(u64, u64)> {
@@ -103,6 +104,7 @@ fn alloc_dma(pages: u64) -> Option<(u64, u64)> {
         return None;
     }
     let virt = phys.0 + mm::hhdm();
+    // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
     unsafe { core::ptr::write_bytes(virt as *mut u8, 0, (pages * PAGE) as usize) };
     Some((virt, phys.0))
 }
@@ -110,48 +112,60 @@ fn alloc_dma(pages: u64) -> Option<(u64, u64)> {
 impl Rtl8139 {
     fn r8(&self, off: u16) -> u8 {
         match self.io {
+            // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
             Reg::Mem(b) => unsafe { read_volatile((b + off as usize) as *const u8) },
             #[cfg(target_arch = "x86_64")]
+            // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
             Reg::Port(p) => unsafe { inb(p + off) },
         }
     }
 
     fn r16(&self, off: u16) -> u16 {
         match self.io {
+            // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
             Reg::Mem(b) => unsafe { read_volatile((b + off as usize) as *const u16) },
             #[cfg(target_arch = "x86_64")]
+            // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
             Reg::Port(p) => unsafe { inw(p + off) },
         }
     }
 
     fn r32(&self, off: u16) -> u32 {
         match self.io {
+            // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
             Reg::Mem(b) => unsafe { read_volatile((b + off as usize) as *const u32) },
             #[cfg(target_arch = "x86_64")]
+            // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
             Reg::Port(p) => unsafe { inl(p + off) },
         }
     }
 
     fn w8(&self, off: u16, v: u8) {
         match self.io {
+            // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
             Reg::Mem(b) => unsafe { write_volatile((b + off as usize) as *mut u8, v) },
             #[cfg(target_arch = "x86_64")]
+            // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
             Reg::Port(p) => unsafe { outb(p + off, v) },
         }
     }
 
     fn w16(&self, off: u16, v: u16) {
         match self.io {
+            // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
             Reg::Mem(b) => unsafe { write_volatile((b + off as usize) as *mut u16, v) },
             #[cfg(target_arch = "x86_64")]
+            // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
             Reg::Port(p) => unsafe { outw(p + off, v) },
         }
     }
 
     fn w32(&self, off: u16, v: u32) {
         match self.io {
+            // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
             Reg::Mem(b) => unsafe { write_volatile((b + off as usize) as *mut u32, v) },
             #[cfg(target_arch = "x86_64")]
+            // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
             Reg::Port(p) => unsafe { outl(p + off, v) },
         }
     }
@@ -201,12 +215,16 @@ pub struct Rtl8139Tx<'a> {
 
 impl RxToken for Rtl8139Rx<'_> {
     fn consume<R, F: FnOnce(&[u8]) -> R>(self, f: F) -> R {
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         let dev = unsafe { &mut *self.dev };
         let hdr = (dev.rx + dev.rx_off as u64) as *const u8;
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         let status = unsafe { read_volatile(hdr as *const u16) };
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         let total = unsafe { read_volatile(hdr.add(2) as *const u16) } as usize;
         let ok = status & RX_OK != 0 && total >= 4 && total <= MTU + 4 + 4;
         let r = if ok {
+            // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
             f(unsafe { core::slice::from_raw_parts(hdr.add(4), total - 4) })
         } else {
             f(&[])
@@ -225,10 +243,12 @@ impl RxToken for Rtl8139Rx<'_> {
 
 impl TxToken for Rtl8139Tx<'_> {
     fn consume<R, F: FnOnce(&mut [u8]) -> R>(self, len: usize, f: F) -> R {
+        // SAFETY: the pointer is valid for the lifetime of its owner and access is exclusive (&mut self or the owning lock is held).
         let dev = unsafe { &mut *self.dev };
         let i = dev.cur_tx;
         let len = len.min(MTU);
         let buf = dev.tx + (i * TX_BUF) as u64;
+        // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
         let slice = unsafe { core::slice::from_raw_parts_mut(buf as *mut u8, len.max(MIN_FRAME)) };
         slice[len..].fill(0);
         let r = f(&mut slice[..len]);

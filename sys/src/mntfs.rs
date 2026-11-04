@@ -122,6 +122,7 @@ pub fn walk_to(path: &str) -> Result<Arc<MntChan>, &'static str> {
 
 fn dir_to_stat(d: &Dir) -> Stat {
     Stat {
+        // SAFETY: FFI/union access: the C call gets valid NUL-terminated or sized buffers owned by this frame, and the union field read matches the message type just checked.
         name: String::from(unsafe { p9fcall::cstr(d.name) }),
         is_dir: d.qid.typ & QTDIR != 0,
         perm: d.mode & 0o777,

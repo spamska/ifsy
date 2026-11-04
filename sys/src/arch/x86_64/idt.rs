@@ -128,9 +128,12 @@ struct IdtPointer {
 
 static mut IDT: Idt = Idt::new();
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn init() {
     let cs = super::gdt::KERNEL_CS;
 
+    // SAFETY: the pointer is valid for the lifetime of its owner and access is exclusive (&mut self or the owning lock is held).
     let idt = unsafe { &mut *core::ptr::addr_of_mut!(IDT) };
     let mut gates = 0usize;
     for (vector, stub) in vectors() {
@@ -149,6 +152,7 @@ pub unsafe fn init() {
         limit: (core::mem::size_of::<Idt>() - 1) as u16,
         base: core::ptr::addr_of!(IDT) as u64,
     };
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { core::arch::asm!("lidt [{}]", in(reg) &idtr, options(readonly, nostack, preserves_flags)) };
 
     crate::kprintln!("ifsy: hardening: x86_64: IDT loaded ({} gates: exceptions with IST for #DF/NMI/#MC, PIC/PIT IRQs 32/39/47, syscall vector {}) {}", gates, VECTOR_SYSCALL, crate::console::color::pass());

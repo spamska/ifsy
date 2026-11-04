@@ -61,13 +61,19 @@ pub struct Port;
 #[derive(Clone)]
 pub struct FpuState([u8; 512]);
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn rdmsr(msr: u32) -> u64 {
     let (lo, hi): (u32, u32);
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("rdmsr", in("ecx") msr, out("eax") lo, out("edx") hi, options(nomem, nostack, preserves_flags)) };
     (u64::from(hi) << 32) | u64::from(lo)
 }
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn wrmsr(msr: u32, v: u64) {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe {
         asm!("wrmsr", in("ecx") msr, in("eax") v as u32, in("edx") (v >> 32) as u32,
              options(nomem, nostack, preserves_flags))
@@ -80,6 +86,8 @@ impl Hal for Port {
     const SYSCALL_ABI: &'static str =
         "Plan 9 amd64: `syscall` or `int $64`, number in rbp, arguments on the user stack from 8(%rsp), result in rax";
 
+    /// # Safety
+    /// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
     unsafe fn init_user_mode() -> bool {
         let (max_ext, ..) = cpuid(0x8000_0000);
         if max_ext < 0x8000_0001 || cpuid(0x8000_0001).3 & (1 << 11) == 0 {
@@ -87,6 +95,7 @@ impl Hal for Port {
             return false;
         }
 
+        // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
         unsafe {
             let (mut cr0, mut cr4): (u64, u64);
             asm!("mov {}, cr0", out(reg) cr0, options(nomem, nostack, preserves_flags));
@@ -117,10 +126,14 @@ impl Hal for Port {
 
     fn set_kernel_stack(top: u64) {
         gdt::set_kernel_stack(top);
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         unsafe { addr_of_mut!(x86_kernel_rsp).write_volatile(top) };
     }
 
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe fn enter_user(regs: &Ureg) -> ! {
+        // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
         unsafe { trap::enter_user(regs) }
     }
 
@@ -131,17 +144,24 @@ impl Hal for Port {
         s
     }
 
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe fn fpu_save(state: &mut FpuState) {
+        // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
         unsafe { asm!(".byte 0x48, 0x0f, 0xae, 0x07", in("rdi") state.0.as_mut_ptr(), options(nostack, preserves_flags)) };
     }
 
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe fn fpu_restore(state: &FpuState) {
+        // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
         unsafe { asm!(".byte 0x48, 0x0f, 0xae, 0x0f", in("rdi") state.0.as_ptr(), options(nostack, preserves_flags)) };
     }
 }
 
 fn cpuid(leaf: u32) -> (u32, u32, u32, u32) {
     let (eax, ebx, ecx, edx): (u32, u32, u32, u32);
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe {
         asm!(
             "mov {t:r}, rbx",

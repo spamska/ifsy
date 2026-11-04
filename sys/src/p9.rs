@@ -33,6 +33,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 pub const DMDIR: u32 = 0x8000_0000;
+pub const DMEXCL: u32 = 0x2000_0000;
+pub const QTEXCL: u8 = 0x20;
 pub const QTDIR: u8 = 0x80;
 pub const QTFILE: u8 = 0x00;
 
@@ -69,10 +71,10 @@ pub fn pack_stat(st: &Stat) -> Vec<u8> {
     put16(&mut v, 0);
     put16(&mut v, 0);
     put32(&mut v, 0);
-    v.push(if st.is_dir { QTDIR } else { QTFILE });
+    v.push(if st.is_dir { QTDIR } else if st.perm & DMEXCL != 0 { QTFILE | QTEXCL } else { QTFILE });
     put32(&mut v, 0);
     put64(&mut v, st.qid_path);
-    let mode = (st.perm & 0o777) | if st.is_dir { DMDIR } else { 0 };
+    let mode = (st.perm & (0o777 | DMEXCL)) | if st.is_dir { DMDIR } else { 0 };
     put32(&mut v, mode);
     put32(&mut v, st.mtime);
     put32(&mut v, st.mtime);

@@ -38,16 +38,23 @@ static HEAP: LockedHeap = LockedHeap::empty();
 
 struct IrqSafeHeap;
 
+// SAFETY: forwards to linked_list_allocator's LockedHeap with IRQs disabled so an interrupt cannot re-enter the allocator; layouts are passed through unchanged.
 unsafe impl GlobalAlloc for IrqSafeHeap {
+    /// # Safety
+    /// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let irq = crate::arch::irq_save();
+        // SAFETY: layout is the caller's valid layout, forwarded as-is to the locked heap.
         let p = unsafe { HEAP.alloc(layout) };
         crate::arch::irq_restore(irq);
         p
     }
 
+    /// # Safety
+    /// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         let irq = crate::arch::irq_save();
+        // SAFETY: GlobalAlloc's contract guarantees ptr came from alloc with this layout.
         unsafe { HEAP.dealloc(ptr, layout) };
         crate::arch::irq_restore(irq);
     }
@@ -65,11 +72,14 @@ pub struct HeapStats {
     pub free: usize,
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn init(start: *mut u8, size: usize) {
     if INITIALISED.swap(true, Ordering::AcqRel) {
         panic!("heap: init called twice");
     }
     let irq = crate::arch::irq_save();
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { HEAP.lock().init(start, size) };
     crate::arch::irq_restore(irq);
 }

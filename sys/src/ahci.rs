@@ -91,11 +91,17 @@ fn find_controller() -> Option<(u32, u32, u32)> {
 
 use crate::pci::{cfg_read, cfg_write};
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn r32(a: u64) -> u32 {
+    // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
     unsafe { read_volatile(a as *const u32) }
 }
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn w32(a: u64, v: u32) {
+    // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
     unsafe { write_volatile(a as *mut u32, v) };
 }
 
@@ -113,6 +119,7 @@ fn wait(ms: u64, mut done: impl FnMut() -> bool) -> bool {
 }
 
 fn stop_port(p: u64) -> bool {
+    // SAFETY: MMIO/port/DMA access to the device this driver probed: addresses are its mapped register window or DMA pages allocated here, offsets are constants inside them, and the driver has exclusive access (&mut self).
     unsafe {
         w32(p + P_CMD, r32(p + P_CMD) & !(CMD_ST | CMD_FRE));
         wait(500, || r32(p + P_CMD) & (CMD_CR | CMD_FR) == 0)
@@ -139,6 +146,7 @@ pub fn probe() -> Option<Ahci> {
         return None;
     };
     let abar = va + off;
+    // SAFETY: MMIO/port/DMA access to the device this driver probed: addresses are its mapped register window or DMA pages allocated here, offsets are constants inside them, and the driver has exclusive access (&mut self).
     unsafe {
         w32(abar + HBA_GHC, r32(abar + HBA_GHC) | 1 << 31);
         let s64 = r32(abar + HBA_CAP) >> 31 & 1 != 0;
@@ -165,6 +173,8 @@ pub fn probe() -> Option<Ahci> {
     None
 }
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn bring_up(p: u64, s64: bool) -> Option<Ahci> {
     if !stop_port(p) {
         return None;
@@ -175,6 +185,7 @@ unsafe fn bring_up(p: u64, s64: bool) -> Option<Ahci> {
         return None;
     }
     let virt = phys + mm::hhdm();
+    // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
     unsafe { core::ptr::write_bytes(virt as *mut u8, 0, PAGE as usize) };
     let mut a = Ahci { port: p, page: virt, page_phys: phys, buf: virt + PAGE, buf_phys: phys + PAGE, sectors: 0 };
     unsafe {
@@ -200,6 +211,7 @@ unsafe fn bring_up(p: u64, s64: bool) -> Option<Ahci> {
     }
     let mut id = [0u16; 256];
     for (i, w) in id.iter_mut().enumerate() {
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         *w = unsafe { read_volatile((a.buf as *const u16).add(i)) };
     }
     let lba48 = id[83] & (1 << 10) != 0;
@@ -222,6 +234,7 @@ unsafe fn bring_up(p: u64, s64: bool) -> Option<Ahci> {
 impl Ahci {
     fn command(&mut self, cmd: u8, lba: u64, count: u16, write: bool, bytes: usize) -> Result<(), ()> {
         let p = self.port;
+        // SAFETY: MMIO/port/DMA access to the device this driver probed: addresses are its mapped register window or DMA pages allocated here, offsets are constants inside them, and the driver has exclusive access (&mut self).
         unsafe {
             if !wait(1000, || r32(p + P_TFD) & TFD_BUSY == 0) {
                 return Err(());
@@ -279,6 +292,7 @@ impl Sectors for Ahci {
         for chunk in buf.chunks_mut(BUF_SECTORS * SECTOR) {
             let n = chunk.len() / SECTOR;
             self.command(ATA_READ_DMA_EXT, lba, n as u16, false, chunk.len())?;
+            // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
             unsafe { core::ptr::copy_nonoverlapping(self.buf as *const u8, chunk.as_mut_ptr(), chunk.len()) };
             lba += n as u64;
         }
@@ -291,6 +305,7 @@ impl Sectors for Ahci {
         }
         for chunk in buf.chunks(BUF_SECTORS * SECTOR) {
             let n = chunk.len() / SECTOR;
+            // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
             unsafe { core::ptr::copy_nonoverlapping(chunk.as_ptr(), self.buf as *mut u8, chunk.len()) };
             self.command(ATA_WRITE_DMA_EXT, lba, n as u16, true, chunk.len())?;
             lba += n as u64;

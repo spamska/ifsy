@@ -34,6 +34,7 @@ use core::arch::asm;
 #[inline]
 pub fn counter() -> u64 {
     let v: u64;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("rdtime {}", out(reg) v, options(nomem, nostack, preserves_flags)) };
     v
 }

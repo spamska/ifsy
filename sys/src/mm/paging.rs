@@ -80,6 +80,8 @@ pub struct Mapper {
 }
 
 impl Mapper {
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     pub const unsafe fn new(root: PhysAddr, hhdm: u64) -> Self {
         Self { root, hhdm, pin_root_slots: false }
     }
@@ -120,6 +122,7 @@ impl Mapper {
 
         for level in (2..=LEVELS).rev() {
             let idx = index(level, virt);
+            // SAFETY: the pointer is valid for the lifetime of its owner and access is exclusive (&mut self or the owning lock is held).
             let entry = unsafe { &mut (*table).entries[idx] };
             if entry.is_huge(level) {
                 self.rollback(frames, &created);
@@ -142,6 +145,7 @@ impl Mapper {
         }
 
         let idx = index(1, virt);
+        // SAFETY: the pointer is valid for the lifetime of its owner and access is exclusive (&mut self or the owning lock is held).
         let leaf = unsafe { &mut (*table).entries[idx] };
         if leaf.raw() != 0 {
             self.rollback(frames, &created);
@@ -158,6 +162,7 @@ impl Mapper {
         created: &[Option<(PhysAddr, *mut PageTable, usize)>; LEVELS],
     ) {
         for (frame, parent, idx) in created.iter().rev().flatten() {
+            // SAFETY: table pointers are HHDM-mapped page-table frames owned by this mapper and every index is below ENTRIES.
             unsafe { (*(*parent)).entries[*idx].clear() };
             frames.free_table_frame(*frame);
         }
@@ -180,6 +185,7 @@ impl Mapper {
         for level in (2..=LEVELS).rev() {
             let idx = index(level, virt);
             path[LEVELS - level] = (table, idx);
+            // SAFETY: the pointer is valid for the lifetime of its owner and access is exclusive (&mut self or the owning lock is held).
             let entry = unsafe { (*table).entries[idx] };
             if entry.is_huge(level) {
                 return Err(UnmapError::HugePage);
@@ -195,6 +201,7 @@ impl Mapper {
 
         let idx = index(1, virt);
         path[LEVELS - 1] = (table, idx);
+        // SAFETY: the pointer is valid for the lifetime of its owner and access is exclusive (&mut self or the owning lock is held).
         let leaf = unsafe { &mut (*table).entries[idx] };
         if !leaf.is_present() {
             return Err(UnmapError::NotMapped);
@@ -204,6 +211,7 @@ impl Mapper {
 
         for depth in (1..LEVELS).rev() {
             let (tbl, _) = path[depth];
+            // SAFETY: table pointers are HHDM-mapped page-table frames owned by this mapper and every index is below ENTRIES.
             let empty = unsafe { (*tbl).entries.iter().all(|e| e.raw() == 0) };
             if !empty {
                 break;
@@ -212,6 +220,7 @@ impl Mapper {
                 break;
             }
             let (parent, pidx) = path[depth - 1];
+            // SAFETY: table pointers are HHDM-mapped page-table frames owned by this mapper and every index is below ENTRIES.
             unsafe { (*parent).entries[pidx].clear() };
             frames.free_table_frame(PhysAddr(tbl as u64 - self.hhdm));
         }
@@ -228,6 +237,7 @@ impl Mapper {
         }
         let mut table = self.table_ptr(self.root);
         for level in (2..=LEVELS).rev() {
+            // SAFETY: the pointer is valid for the lifetime of its owner and access is exclusive (&mut self or the owning lock is held).
             let entry = unsafe { (*table).entries[index(level, virt)] };
             if entry.is_huge(level) {
                 return Err(UnmapError::HugePage);
@@ -237,6 +247,7 @@ impl Mapper {
             }
             table = self.table_ptr(entry.addr());
         }
+        // SAFETY: the pointer is valid for the lifetime of its owner and access is exclusive (&mut self or the owning lock is held).
         let leaf = unsafe { &mut (*table).entries[index(1, virt)] };
         if !leaf.is_present() {
             return Err(UnmapError::NotMapped);
@@ -253,6 +264,7 @@ impl Mapper {
         }
         let mut table = self.table_ptr(self.root);
         for level in (1..=LEVELS).rev() {
+            // SAFETY: the pointer is valid for the lifetime of its owner and access is exclusive (&mut self or the owning lock is held).
             let entry = unsafe { (*table).entries[index(level, virt)] };
             if entry.is_huge(level) {
                 let size = 1u64 << (12 + 9 * (level - 1));
@@ -285,6 +297,7 @@ impl Mapper {
     ) {
         let table = self.table_ptr(tbl);
         for i in from..to {
+            // SAFETY: the pointer is valid for the lifetime of its owner and access is exclusive (&mut self or the owning lock is held).
             let entry = unsafe { (*table).entries[i] };
             let va = base | ((i as u64) << (12 + 9 * (level - 1)));
             if entry.is_huge(level) || (level == 1 && entry.is_present()) {
@@ -304,6 +317,7 @@ impl Mapper {
         let table = self.table_ptr(tbl);
         let mut fixed = 0;
         for i in from..to {
+            // SAFETY: the pointer is valid for the lifetime of its owner and access is exclusive (&mut self or the owning lock is held).
             let entry = unsafe { &mut (*table).entries[i] };
             if entry.is_huge(level) || (level == 1 && entry.is_present()) {
                 if entry.is_present() || entry.is_huge(level) {
@@ -322,6 +336,7 @@ impl Mapper {
     pub fn free_tables<F: FrameSource>(&self, frames: &mut F, limit: usize) {
         let root = self.table_ptr(self.root);
         for i in 0..limit.min(ENTRIES) {
+            // SAFETY: table pointers are HHDM-mapped page-table frames owned by this mapper and every index is below ENTRIES.
             let entry = unsafe { &mut (*root).entries[i] };
             if !entry.is_huge(LEVELS) && entry.is_present() {
                 self.free_subtree(frames, entry.addr(), LEVELS - 1);
@@ -337,6 +352,7 @@ impl Mapper {
         }
         let table = self.table_ptr(tbl);
         for i in 0..ENTRIES {
+            // SAFETY: the pointer is valid for the lifetime of its owner and access is exclusive (&mut self or the owning lock is held).
             let entry = unsafe { (*table).entries[i] };
             if !entry.is_huge(level) && entry.is_present() {
                 self.free_subtree(frames, entry.addr(), level - 1);

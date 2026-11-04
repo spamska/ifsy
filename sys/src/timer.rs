@@ -168,6 +168,7 @@ pub fn start_irq() -> bool {
     resync();
     IRQ_COUNT.store(0, Ordering::Relaxed);
     RESCHED.store(false, Ordering::Relaxed);
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     let ok = unsafe { arch::timer_irq_start(next_deadline(), sched::HZ) };
     IRQ_ACTIVE.store(ok, Ordering::Relaxed);
     ok
@@ -175,6 +176,7 @@ pub fn start_irq() -> bool {
 
 pub fn stop_irq() {
     if IRQ_ACTIVE.swap(false, Ordering::Relaxed) {
+        // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
         unsafe { arch::timer_irq_stop() };
     }
     resync();

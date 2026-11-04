@@ -34,13 +34,19 @@ use core::fmt;
 const COM1: u16 = 0x3F8;
 
 #[inline]
+/// # Safety
+/// x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
 unsafe fn outb(port: u16, val: u8) {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { core::arch::asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack, preserves_flags)) };
 }
 
 #[inline]
+/// # Safety
+/// x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
 unsafe fn inb(port: u16) -> u8 {
     let val: u8;
+    // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     unsafe { core::arch::asm!("in al, dx", out("al") val, in("dx") port, options(nomem, nostack, preserves_flags)) };
     val
 }
@@ -48,7 +54,10 @@ unsafe fn inb(port: u16) -> u8 {
 pub struct SerialPort;
 
 impl SerialPort {
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     pub unsafe fn init() -> Self {
+        // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
         unsafe {
             outb(COM1 + 1, 0x00);
             outb(COM1 + 3, 0x80);
@@ -62,16 +71,19 @@ impl SerialPort {
     }
 
     fn line_status(&self) -> u8 {
+        // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
         unsafe { inb(COM1 + 5) }
     }
 
     pub fn write_byte(&mut self, byte: u8) {
         while self.line_status() & 0x20 == 0 {}
+        // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
         unsafe { outb(COM1, byte) };
     }
 
     pub fn read_byte(&mut self) -> Option<u8> {
         if self.line_status() & 0x01 != 0 {
+            // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
             Some(unsafe { inb(COM1) })
         } else {
             None

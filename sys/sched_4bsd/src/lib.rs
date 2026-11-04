@@ -91,20 +91,13 @@ pub mod ffi {
         // ---- context switching ----
         pub fn sched_set_context_switching(on: bool);
         pub fn sched_context_switching() -> bool;
-        /// Give `td` (NULL = this CPU's idle context) a fresh context that
-        /// starts in `entry(arg)` on the stack whose top is `stack_top`.
         pub fn sched_set_thread_context(
             td: *mut thread_t,
             stack_top: *mut c_void,
             entry: unsafe extern "C" fn(*mut c_void),
             arg: *mut c_void,
         ) -> bool;
-        /// mi_switch() bookkeeping (call under the scheduler lock): `old`
-        /// leaves the CPU, the best thread is chosen and returned (NULL =
-        /// idle).
         pub fn sched_switch_prepare(old: *mut thread_t, sw: *mut sched_switch) -> *mut thread_t;
-        /// Register/stack half (interrupts masked, lock not held). Returns in
-        /// the old thread only when something switches back to it.
         pub fn sched_switch_run(sw: *const sched_switch);
     }
 }

@@ -50,13 +50,21 @@ pub mod user;
 
 pub use user::Port;
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn init_protection() {
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { protect::init() };
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn init_traps() {
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { gdt::init() };
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { idt::init() };
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     if !unsafe { <Port as crate::arch::Hal>::init_user_mode() } {
         crate::kprintln!("ifsy: user: x86_64: cannot enable user mode on this CPU; halting {}", crate::console::color::failed());
         halt();
@@ -65,12 +73,14 @@ pub unsafe fn init_traps() {
 
 #[inline]
 pub fn mask_interrupts() {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("cli") };
 }
 
 #[inline]
 pub fn irq_save() -> usize {
     let flags: u64;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("pushfq", "pop {}", "cli", out(reg) flags) };
     flags as usize
 }
@@ -78,21 +88,27 @@ pub fn irq_save() -> usize {
 #[inline]
 pub fn irq_restore(saved: usize) {
     if saved & (1 << 9) != 0 {
+        // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
         unsafe { asm!("sti") };
     }
 }
 
 #[inline]
 pub fn irq_enable() {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("sti") };
 }
 
 #[inline]
 pub fn idle_wait() {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("sti", "hlt", "cli") };
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn timer_irq_start(_first_deadline: u64, hz: u64) -> bool {
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { pic::start(hz) };
     true
 }
@@ -108,6 +124,7 @@ static TIMER_FAST: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBo
 pub fn timer_fast(on: bool) {
     if TIMER_FAST.swap(on, core::sync::atomic::Ordering::Relaxed) != on {
         let hz = if on { 2000 } else { crate::sched::HZ };
+        // SAFETY: architecture-specific privileged or MMIO access at kernel privilege, performed in the init order established by kmain.
         unsafe { pic::set_rate(hz) };
     }
 }
@@ -116,29 +133,40 @@ pub fn timer_irq_diag() {
     pic::diagnose();
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn timer_irq_stop() {
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { pic::stop() };
 }
 
 pub fn halt() -> ! {
     mask_interrupts();
     loop {
+        // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
         unsafe { asm!("hlt") };
     }
 }
 
 #[inline]
+/// # Safety
+/// x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
 unsafe fn outw(port: u16, val: u16) {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("out dx, ax", in("dx") port, in("ax") val, options(nomem, nostack, preserves_flags)) };
 }
 
 #[inline]
+/// # Safety
+/// x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
 unsafe fn outb(port: u16, val: u8) {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack, preserves_flags)) };
 }
 
 pub fn power_off() -> ! {
     mask_interrupts();
+    // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     unsafe {
         outw(0x604, 0x2000);
         outw(0xB004, 0x2000);
@@ -149,6 +177,7 @@ pub fn power_off() -> ! {
 
 pub fn reset() -> ! {
     mask_interrupts();
+    // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     unsafe {
         outb(0x64, 0xFE);
         outb(0xCF9, 0x0E);

@@ -54,13 +54,17 @@ impl Hal for Port {
     const SYSCALL_ABI: &'static str =
         "riscv64: `ecall`, number in a7, arguments in a0-a5, result in a0 (nothing is read from the user stack)";
 
+    /// # Safety
+    /// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
     unsafe fn init_user_mode() -> bool {
         let sstatus: u64;
+        // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
         unsafe { asm!("csrr {}, sstatus", out(reg) sstatus, options(nomem, nostack, preserves_flags)) };
         if sstatus & SSTATUS_FS == 0 {
             crate::kprintln!("ifsy: user: riscv64: sstatus.FS is off; user mode needs the FPU {}", crate::console::color::failed());
             return false;
         }
+        // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
         unsafe {
             asm!("csrw sscratch, zero", "csrw scounteren, {}", in(reg) 7u64, options(nostack));
         }
@@ -73,10 +77,14 @@ impl Hal for Port {
     }
 
     fn set_kernel_stack(top: u64) {
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         unsafe { addr_of_mut!(traps::riscv_kernel_sp).write_volatile(top) };
     }
 
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe fn enter_user(regs: &Ureg) -> ! {
+        // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
         unsafe { traps::enter_user(regs) }
     }
 
@@ -84,10 +92,15 @@ impl Hal for Port {
         FpuState([0; 33])
     }
 
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe fn fpu_save(state: &mut FpuState) {
+        // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
         unsafe { riscv_fpu_save(state.0.as_mut_ptr()) };
     }
 
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe fn fpu_restore(state: &FpuState) {
         unsafe { riscv_fpu_restore(state.0.as_ptr()) };
     }

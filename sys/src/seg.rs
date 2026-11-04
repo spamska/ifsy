@@ -174,7 +174,7 @@ pub fn sys_segdetach(va: u64) -> i64 {
 pub fn sys_segfree(va: u64, len: u64) -> i64 {
     let Some(me) = sched::current() else { return -1 };
     let Some(end) = va.checked_add(len) else { return fail("bad arg in system call") };
-    let from = (va + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+    let Some(from) = round_up(va) else { return fail("bad arg in system call") };
     let to = end & !(PAGE_SIZE - 1);
     if to < from {
         return fail("bad arg in system call");
@@ -183,7 +183,7 @@ pub fn sys_segfree(va: u64, len: u64) -> i64 {
         return 0;
     }
     let r = sched::with_aspace(me, |a| match a.region_at(from) {
-        Some((start, rlen, Kind::Anon)) if start + rlen >= to => a.unmap(from, to - from),
+        Some((start, rlen, Kind::Anon)) if start.checked_add(rlen).is_some_and(|e| e >= to) => a.unmap(from, to - from),
         Some(_) => Err(AsError::Denied),
         None => Err(AsError::NotMapped),
     });
@@ -205,7 +205,10 @@ pub fn sys_segflush(va: u64, len: u64) -> i64 {
         let mut cur = va & !(PAGE_SIZE - 1);
         while cur < end {
             match a.region_at(cur) {
-                Some((s, l, _)) => cur = s + l,
+                Some((s, l, _)) => match s.checked_add(l) {
+                    Some(e) if e > cur => cur = e,
+                    _ => return false,
+                },
                 None => return false,
             }
         }
@@ -223,11 +226,14 @@ pub fn sys_segflush(va: u64, len: u64) -> i64 {
 
 #[cfg(target_arch = "aarch64")]
 fn sync_icache() {
+    // SAFETY: cache/barrier maintenance instructions only; they touch no Rust-visible memory
+    // and are valid at EL1.
     unsafe { core::arch::asm!("dsb ish", "ic ialluis", "dsb ish", "isb") };
 }
 
 #[cfg(target_arch = "riscv64")]
 fn sync_icache() {
+    // SAFETY: `fence.i` only synchronizes the instruction stream with prior stores on this hart.
     unsafe { core::arch::asm!("fence.i") };
 }
 

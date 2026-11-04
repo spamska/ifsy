@@ -101,7 +101,9 @@ pub fn content(name: &str) -> Option<Vec<u8>> {
 fn fsinfo() -> String {
     use lwext4_rust::bindings::{ext4_mount_point_stats, ext4_mount_stats};
     let got = crate::fs::with_root(|_| {
+        // SAFETY: the 4BSD C state is only touched while the scheduler lock is held (all callers go through SCHED) and after sched_init.
         let mut st: ext4_mount_stats = unsafe { core::mem::zeroed() };
+        // SAFETY: the 4BSD C state is only touched while the scheduler lock is held (all callers go through SCHED) and after sched_init.
         let r = unsafe { ext4_mount_point_stats(b"/\0".as_ptr() as *const core::ffi::c_char, &mut st) };
         (r, st)
     });

@@ -33,32 +33,50 @@
 mod pio {
     use core::arch::asm;
 
+    /// # Safety
+    /// x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     pub unsafe fn outb(port: u16, v: u8) {
+        // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
         unsafe { asm!("out dx, al", in("dx") port, in("al") v, options(nomem, nostack, preserves_flags)) };
     }
 
+    /// # Safety
+    /// x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     pub unsafe fn outw(port: u16, v: u16) {
+        // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
         unsafe { asm!("out dx, ax", in("dx") port, in("ax") v, options(nomem, nostack, preserves_flags)) };
     }
 
+    /// # Safety
+    /// x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     pub unsafe fn outl(port: u16, v: u32) {
+        // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
         unsafe { asm!("out dx, eax", in("dx") port, in("eax") v, options(nomem, nostack, preserves_flags)) };
     }
 
+    /// # Safety
+    /// x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     pub unsafe fn inb(port: u16) -> u8 {
         let v: u8;
+        // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
         unsafe { asm!("in al, dx", in("dx") port, out("al") v, options(nomem, nostack, preserves_flags)) };
         v
     }
 
+    /// # Safety
+    /// x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     pub unsafe fn inw(port: u16) -> u16 {
         let v: u16;
+        // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
         unsafe { asm!("in ax, dx", in("dx") port, out("ax") v, options(nomem, nostack, preserves_flags)) };
         v
     }
 
+    /// # Safety
+    /// x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     pub unsafe fn inl(port: u16) -> u32 {
         let v: u32;
+        // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
         unsafe { asm!("in eax, dx", in("dx") port, out("eax") v, options(nomem, nostack, preserves_flags)) };
         v
     }
@@ -68,6 +86,7 @@ mod pio {
     }
 
     pub fn cfg_read(b: u32, d: u32, f: u32, off: u32) -> u32 {
+        // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
         unsafe {
             outl(0xcf8, addr(b, d, f, off));
             inl(0xcfc)
@@ -75,6 +94,7 @@ mod pio {
     }
 
     pub fn cfg_write(b: u32, d: u32, f: u32, off: u32, v: u32) {
+        // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
         unsafe {
             outl(0xcf8, addr(b, d, f, off));
             outl(0xcfc, v);
@@ -114,6 +134,7 @@ mod ecam {
 
     pub fn cfg_read(b: u32, d: u32, f: u32, off: u32) -> u32 {
         match addr(b, d, f, off) {
+            // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
             Some(a) => unsafe { read_volatile(a as *const u32) },
             None => 0xffff_ffff,
         }
@@ -121,6 +142,7 @@ mod ecam {
 
     pub fn cfg_write(b: u32, d: u32, f: u32, off: u32, v: u32) {
         if let Some(a) = addr(b, d, f, off) {
+            // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
             unsafe { write_volatile(a as *mut u32, v) };
         }
     }

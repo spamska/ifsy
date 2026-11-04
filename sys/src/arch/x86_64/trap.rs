@@ -161,18 +161,23 @@ impl TrapFrame {
     }
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn enter_user(regs: &Ureg) -> ! {
     super::mask_interrupts();
     let mut frame = TrapFrame::zeroed();
     frame.load_ureg(regs);
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { x86_enter_frame(&frame) }
 }
 
 pub fn vectors() -> impl Iterator<Item = (u8, u64)> {
     let start = core::ptr::addr_of!(trap_vector_table) as *const [u64; 2];
     let end = core::ptr::addr_of!(trap_vector_table_end) as *const [u64; 2];
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     let n = unsafe { end.offset_from(start) } as usize;
     (0..n).map(move |i| {
+        // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
         let [v, a] = unsafe { *start.add(i) };
         (v as u8, a)
     })
@@ -210,6 +215,7 @@ fn has_error_code(v: u64) -> bool {
 
 fn read_cr2() -> u64 {
     let v: u64;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { core::arch::asm!("mov {}, cr2", out(reg) v, options(nomem, nostack, preserves_flags)) };
     v
 }

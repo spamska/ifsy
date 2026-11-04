@@ -35,8 +35,11 @@ const DATA: u16 = 0x60;
 const STATUS: u16 = 0x64;
 
 #[inline]
+/// # Safety
+/// x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
 unsafe fn inb(port: u16) -> u8 {
     let val: u8;
+    // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     unsafe { core::arch::asm!("in al, dx", out("al") val, in("dx") port, options(nomem, nostack, preserves_flags)) };
     val
 }
@@ -51,10 +54,12 @@ static EXTENDED: AtomicBool = AtomicBool::new(false);
 
 pub fn read_byte() -> Option<u8> {
     for _ in 0..16 {
+        // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
         let status = unsafe { inb(STATUS) };
         if status == 0xFF || status & 0x01 == 0 {
             return None;
         }
+        // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
         let code = unsafe { inb(DATA) };
         if status & 0x20 != 0 {
             continue;

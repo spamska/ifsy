@@ -63,43 +63,57 @@ _start:
 "#
 );
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn init_protection() {
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { protect::init() };
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn init_traps() {
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { traps::init() };
     unsafe { <Port as crate::arch::Hal>::init_user_mode() };
 }
 
 #[inline]
 pub fn mask_interrupts() {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("msr daifset, #0xf") };
 }
 
 #[inline]
 pub fn irq_save() -> usize {
     let daif: u64;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("mrs {}, daif", "msr daifset, #2", out(reg) daif, options(nostack)) };
     daif as usize
 }
 
 #[inline]
 pub fn irq_restore(saved: usize) {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("msr daif, {}", in(reg) saved as u64, options(nostack)) };
 }
 
 #[inline]
 pub fn irq_enable() {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("msr daifclr, #2", options(nostack)) };
 }
 
 #[inline]
 pub fn idle_wait() {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("msr daifclr, #2", "isb", "wfi", "msr daifset, #2", options(nostack)) };
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn timer_irq_start(first_deadline: u64, _hz: u64) -> bool {
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { irq::start(first_deadline) }
 }
 
@@ -107,13 +121,17 @@ pub fn timer_irq_diag() {}
 
 pub fn timer_fast(_on: bool) {}
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn timer_irq_stop() {
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { irq::stop() };
 }
 
 pub fn halt() -> ! {
     mask_interrupts();
     loop {
+        // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
         unsafe { asm!("wfi") };
     }
 }
@@ -121,6 +139,7 @@ pub fn halt() -> ! {
 fn psci(id: u64) {
     for conduit in 0..2 {
         let mut ret = id;
+        // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
         unsafe {
             if conduit == 0 {
                 asm!("hvc #0", inout("x0") ret, in("x1") 0u64, in("x2") 0u64, in("x3") 0u64, clobber_abi("C"), options(nostack));

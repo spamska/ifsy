@@ -33,7 +33,10 @@ use core::arch::asm;
 
 const SSTATUS_SUM: u64 = 1 << 18;
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn init() {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe {
         asm!(
             "li {tmp}, {mask}",

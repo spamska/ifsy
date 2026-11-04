@@ -68,6 +68,7 @@ pub struct FrameAllocator {
     free: u64,
     hint: usize,
 }
+// SAFETY: access to the inner value is serialized by the lock (or the data is only moved once), so sharing across threads cannot race.
 unsafe impl Send for FrameAllocator {}
 
 #[derive(Debug, PartialEq, Eq)]
@@ -81,6 +82,8 @@ impl FrameAllocator {
         Self { bitmap: core::ptr::null_mut(), managed: core::ptr::null_mut(), words: 0, frames: 0, free: 0, hint: 0 }
     }
 
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     pub unsafe fn init(
         &mut self,
         usable: &[Range],
@@ -133,11 +136,14 @@ impl FrameAllocator {
             .ok_or(InitError::NoRoomForBitmap)?;
 
         let ptr = (bm.base + hhdm) as *mut u64;
+        // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
         unsafe {
             core::ptr::write_bytes(ptr, 0xFF, words);
             core::ptr::write_bytes(ptr.add(words), 0x00, words);
         }
         self.bitmap = ptr;
+        // SAFETY: w is a word index below self.words (derived from a frame number checked against self.frames, or the loop bound), within the bitmap/managed arrays allocated in init; &mut self or the frame lock gives exclusive access.
+        // SAFETY: the allocation behind ptr holds 2*words u64s (bitmap then managed), so ptr+words is in bounds.
         self.managed = unsafe { ptr.add(words) };
         self.words = words;
         self.frames = frames;
@@ -150,6 +156,7 @@ impl FrameAllocator {
                 let f = a / PAGE_SIZE;
                 self.clear(f);
                 let (w, b) = Self::word_bit(f);
+                // SAFETY: w is a word index below self.words (derived from a frame number checked against self.frames, or the loop bound), within the bitmap/managed arrays allocated in init; &mut self or the frame lock gives exclusive access.
                 unsafe { *self.managed.add(w) |= b };
                 a += PAGE_SIZE;
             }
@@ -159,6 +166,7 @@ impl FrameAllocator {
             let f = a / PAGE_SIZE;
             self.set(f);
             let (w, b) = Self::word_bit(f);
+            // SAFETY: w is a word index below self.words (derived from a frame number checked against self.frames, or the loop bound), within the bitmap/managed arrays allocated in init; &mut self or the frame lock gives exclusive access.
             unsafe { *self.managed.add(w) &= !b };
             a += PAGE_SIZE;
         }
@@ -170,7 +178,12 @@ impl FrameAllocator {
     }
 
     fn is_set(&self, frame: u64) -> bool {
+        if frame >= self.frames {
+            // Out-of-range frames are never allocatable; report them as in use.
+            return true;
+        }
         let (w, b) = Self::word_bit(frame);
+        // SAFETY: frame < self.frames, so w < self.words, the length of the bitmap allocated in init.
         unsafe { *self.bitmap.add(w) & b != 0 }
     }
 
@@ -182,6 +195,7 @@ impl FrameAllocator {
             self.free -= 1;
         }
         let (w, b) = Self::word_bit(frame);
+        // SAFETY: w is a word index below self.words (derived from a frame number checked against self.frames, or the loop bound), within the bitmap/managed arrays allocated in init; &mut self or the frame lock gives exclusive access.
         unsafe { *self.bitmap.add(w) |= b };
     }
 
@@ -193,6 +207,7 @@ impl FrameAllocator {
             self.free += 1;
         }
         let (w, b) = Self::word_bit(frame);
+        // SAFETY: w is a word index below self.words (derived from a frame number checked against self.frames, or the loop bound), within the bitmap/managed arrays allocated in init; &mut self or the frame lock gives exclusive access.
         unsafe { *self.bitmap.add(w) &= !b };
     }
 
@@ -202,6 +217,7 @@ impl FrameAllocator {
         }
         let mut n = 0u64;
         for w in 0..self.words {
+            // SAFETY: w is a word index below self.words (derived from a frame number checked against self.frames, or the loop bound), within the bitmap/managed arrays allocated in init; &mut self or the frame lock gives exclusive access.
             n += unsafe { *self.managed.add(w) }.count_ones() as u64;
         }
         n
@@ -217,6 +233,7 @@ impl FrameAllocator {
         }
         for i in 0..self.words {
             let w = (self.hint + i) % self.words;
+            // SAFETY: w is a word index below self.words (derived from a frame number checked against self.frames, or the loop bound), within the bitmap/managed arrays allocated in init; &mut self or the frame lock gives exclusive access.
             let bits = unsafe { *self.bitmap.add(w) };
             if bits != u64::MAX {
                 let bit = (!bits).trailing_zeros() as u64;
@@ -268,6 +285,7 @@ impl FrameAllocator {
         }
         for f in first..last {
             let (w, b) = Self::word_bit(f);
+            // SAFETY: w is a word index below self.words (derived from a frame number checked against self.frames, or the loop bound), within the bitmap/managed arrays allocated in init; &mut self or the frame lock gives exclusive access.
             if !self.is_set(f) || unsafe { *self.managed.add(w) } & b == 0 {
                 return false;
             }
@@ -281,6 +299,7 @@ impl FrameAllocator {
 
     pub fn alloc_zeroed(&mut self, hhdm: u64) -> Option<PhysAddr> {
         let f = self.alloc()?;
+        // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
         unsafe { core::ptr::write_bytes((f.0 + hhdm) as *mut u8, 0, PAGE_SIZE as usize) };
         Some(f)
     }
@@ -294,6 +313,7 @@ impl FrameAllocator {
             return false;
         }
         let (w, b) = Self::word_bit(frame);
+        // SAFETY: w is a word index below self.words (derived from a frame number checked against self.frames, or the loop bound), within the bitmap/managed arrays allocated in init; &mut self or the frame lock gives exclusive access.
         if unsafe { *self.managed.add(w) } & b == 0 {
             return false;
         }

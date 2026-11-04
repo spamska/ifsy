@@ -47,17 +47,26 @@ pub mod user;
 
 pub use user::Port;
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn init_protection() {
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { protect::init() };
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn init_traps() {
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { traps::init() };
     unsafe { enable_fpu() };
 }
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn enable_fpu() {
     const FS_INITIAL: usize = 0x2000;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe {
         asm!(
             "csrs sstatus, {fs}",
@@ -71,12 +80,14 @@ unsafe fn enable_fpu() {
 
 #[inline]
 pub fn mask_interrupts() {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("csrci sstatus, 0x2") };
 }
 
 #[inline]
 pub fn irq_save() -> usize {
     let old: usize;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("csrrci {}, sstatus, 0x2", out(reg) old, options(nostack)) };
     old
 }
@@ -84,21 +95,27 @@ pub fn irq_save() -> usize {
 #[inline]
 pub fn irq_restore(saved: usize) {
     if saved & 0x2 != 0 {
+        // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
         unsafe { asm!("csrsi sstatus, 0x2", options(nostack)) };
     }
 }
 
 #[inline]
 pub fn irq_enable() {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("csrsi sstatus, 0x2", options(nostack)) };
 }
 
 #[inline]
 pub fn idle_wait() {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("csrsi sstatus, 0x2", "wfi", "csrci sstatus, 0x2", options(nostack)) };
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn timer_irq_start(first_deadline: u64, _hz: u64) -> bool {
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { irq::start(first_deadline) }
 }
 
@@ -106,19 +123,24 @@ pub fn timer_irq_diag() {}
 
 pub fn timer_fast(_on: bool) {}
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn timer_irq_stop() {
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { irq::stop() };
 }
 
 pub fn halt() -> ! {
     mask_interrupts();
     loop {
+        // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
         unsafe { asm!("wfi") };
     }
 }
 
 fn sbi_call2(eid: usize, fid: usize, arg0: usize, arg1: usize) -> (isize, usize) {
     let (err, val): (isize, usize);
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe {
         asm!(
             "ecall",

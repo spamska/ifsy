@@ -49,19 +49,28 @@ const MSR_APIC_BASE: u32 = 0x1b;
 const APIC_BASE_ENABLE: u64 = 1 << 11;
 const APIC_BASE_X2APIC: u64 = 1 << 10;
 
+/// # Safety
+/// x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
 unsafe fn inb(port: u16) -> u8 {
     let v: u8;
+    // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     unsafe { asm!("in al, dx", in("dx") port, out("al") v, options(nomem, nostack, preserves_flags)) };
     v
 }
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn rdmsr(msr: u32) -> u64 {
     let (lo, hi): (u32, u32);
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("rdmsr", in("ecx") msr, out("eax") lo, out("edx") hi, options(nomem, nostack, preserves_flags)) };
     ((hi as u64) << 32) | lo as u64
 }
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn wrmsr(msr: u32, v: u64) {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe {
         asm!("wrmsr", in("ecx") msr, in("eax") v as u32, in("edx") (v >> 32) as u32,
              options(nomem, nostack, preserves_flags))
@@ -69,20 +78,26 @@ unsafe fn wrmsr(msr: u32, v: u64) {
 }
 
 fn has_apic() -> bool {
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { core::arch::x86_64::__cpuid(1).edx & (1 << 9) != 0 }
 }
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn route_pic_to_cpu() {
     if !has_apic() {
         return;
     }
+    // SAFETY: architecture-specific privileged or MMIO access at kernel privilege, performed in the init order established by kmain.
     let base = unsafe { rdmsr(MSR_APIC_BASE) };
     if base & APIC_BASE_ENABLE != 0 {
+        // SAFETY: architecture-specific privileged or MMIO access at kernel privilege, performed in the init order established by kmain.
         unsafe { wrmsr(MSR_APIC_BASE, base & !(APIC_BASE_ENABLE | APIC_BASE_X2APIC)) };
     }
 }
 
 pub fn diagnose() {
+    // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     let (base, imr, irr, isr) = unsafe {
         let base = if has_apic() { rdmsr(MSR_APIC_BASE) } else { 0 };
         outb(PIC1_CMD, 0x0a);
@@ -101,15 +116,24 @@ pub fn diagnose() {
     );
 }
 
+/// # Safety
+/// x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
 unsafe fn outb(port: u16, v: u8) {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("out dx, al", in("dx") port, in("al") v, options(nomem, nostack, preserves_flags)) };
 }
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn io_wait() {
+    // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     unsafe { outb(0x80, 0) };
 }
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn remap_and_mask() {
+    // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     unsafe {
         outb(PIC1_CMD, 0x11);
         io_wait();
@@ -132,8 +156,11 @@ unsafe fn remap_and_mask() {
     }
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn start(hz: u64) {
     let div = PIT_HZ.div_ceil(hz.max(19)).clamp(1, 0xffff) as u16;
+    // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     unsafe {
         route_pic_to_cpu();
         remap_and_mask();
@@ -144,8 +171,11 @@ pub unsafe fn start(hz: u64) {
     }
 }
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 pub unsafe fn set_rate(hz: u64) {
     let div = PIT_HZ.div_ceil(hz.max(19)).clamp(1, 0xffff) as u16;
+    // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     unsafe {
         outb(PIT_CMD, 0x34);
         outb(PIT_CH0, div as u8);
@@ -153,7 +183,10 @@ pub unsafe fn set_rate(hz: u64) {
     }
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn stop() {
+    // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     unsafe {
         outb(PIC1_DATA, 0xff);
         outb(PIC2_DATA, 0xff);
@@ -161,5 +194,6 @@ pub unsafe fn stop() {
 }
 
 pub fn eoi_master() {
+    // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     unsafe { outb(PIC1_CMD, EOI) };
 }

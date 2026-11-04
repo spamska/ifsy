@@ -303,6 +303,7 @@ pub fn pack_request(req: &Request, tag: u16) -> Res<Vec<u8>> {
 
 fn reply_from(f: &Fcall) -> Reply {
     let mut r = Reply { typ: f.typ, tag: f.tag, ..Reply::default() };
+    // SAFETY: FFI/union access: the C call gets valid NUL-terminated or sized buffers owned by this frame, and the union field read matches the message type just checked.
     unsafe {
         match f.typ {
             p9fcall::RVERSION => {

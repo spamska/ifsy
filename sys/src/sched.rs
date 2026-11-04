@@ -63,6 +63,14 @@ pub const RFCNAMEG: u64 = 1 << 10;
 pub const RFPROC: u64 = 1 << 4;
 pub const RFNOWAIT: u64 = 1 << 6;
 pub const RFMEM: u64 = 1 << 5;
+pub const RFENVG: u64 = 1 << 1;
+pub const RFNOTEG: u64 = 1 << 3;
+pub const RFCENVG: u64 = 1 << 11;
+pub const RFCFDG: u64 = 1 << 12;
+pub const RFREND: u64 = 1 << 13;
+pub const RFNOMNT: u64 = 1 << 14;
+/// Every rfork flag the kernel understands; any other bit is rejected.
+pub const RF_ALL: u64 = RFNAMEG | RFENVG | RFFDG | RFNOTEG | RFPROC | RFMEM | RFNOWAIT | RFCNAMEG | RFCENVG | RFCFDG | RFREND | RFNOMNT;
 
 pub const ERRMAX: usize = 128;
 
@@ -128,6 +136,11 @@ struct Thread {
     ns: crate::ns::SharedNs,
     /// Who the thread runs as ; inherited by rfork.
     user: String,
+    /// Rendezvous group; threads only meet within one group (see RFREND).
+    rgrp: u32,
+    /// Note group; notes may be posted to every member (see RFNOTEG).
+    #[allow(dead_code)]
+    ngrp: u32,
 }
 
 /// The host owner: the only user that may change its user name, shut the machine down,
@@ -190,6 +203,8 @@ impl Thread {
             fds: crate::io::new_table(),
             ns: crate::ns::new_ns(),
             user: String::from(HOSTOWNER),
+            rgrp: 0,
+            ngrp: 0,
         }
     }
 }
@@ -206,7 +221,7 @@ pub struct Sched {
     next_tid: Tid,
     ticks: u64,
     need_resched: bool,
-    rendezvous: BTreeMap<u64, (Tid, u64)>,
+    rendezvous: BTreeMap<(u32, u64), (Tid, u64)>,
     pending: Option<PendingSwitch>,
     graveyard: Vec<Stack>,
     idle_stack: Option<Stack>,
@@ -216,6 +231,7 @@ struct PendingSwitch {
     sw: ffi::sched_switch,
     plan: SwitchPlan,
 }
+// SAFETY: access to the inner value is serialized by the lock (or the data is only moved once), so sharing across threads cannot race.
 unsafe impl Send for PendingSwitch {}
 
 static SWITCHING: AtomicBool = AtomicBool::new(false);
@@ -254,6 +270,7 @@ impl Sched {
     fn schedule(&mut self) -> Option<Tid> {
         if let Some(cur) = self.current {
             if self.threads.get(&cur).is_some_and(|t| t.state == State::Running) {
+                // SAFETY: the 4BSD C state is only touched while the scheduler lock is held (all callers go through SCHED) and after sched_init.
                 if !unsafe { ffi::sched_resched_pending() } {
                     self.need_resched = false;
                     return Some(cur);
@@ -265,6 +282,7 @@ impl Sched {
         }
         let old = self.current;
         let mut sw = ffi::sched_switch::empty();
+        // SAFETY: the 4BSD C state is only touched while the scheduler lock is held (all callers go through SCHED) and after sched_init.
         let next = tid_of(unsafe { ffi::sched_switch_prepare(handle_of(old), &mut sw) });
         match sw.kind {
             ffi::SW_SWITCH | ffi::SW_THROW => {
@@ -316,6 +334,7 @@ impl Sched {
         t.state = State::Ready;
         t.pending_ret = ret;
         t.deadline = None;
+        // SAFETY: the 4BSD C state is only touched while the scheduler lock is held (all callers go through SCHED) and after sched_init.
         if unsafe { ffi::sched_wakeup(handle(tid)) } {
             self.need_resched = true;
         }
@@ -327,6 +346,7 @@ impl Sched {
             t.state = State::Sleeping(why);
             t.syscall_blocked = true;
         }
+        // SAFETY: the 4BSD C state is only touched while the scheduler lock is held (all callers go through SCHED) and after sched_init.
         unsafe { ffi::sched_sleep(handle(me)) };
         self.need_resched = true;
     }
@@ -338,17 +358,21 @@ impl Sched {
 
         let stack = if SWITCHING.load(Ordering::Relaxed) { Some(Stack::alloc()?) } else { None };
 
+        // SAFETY: the 4BSD C state is only touched while the scheduler lock is held (all callers go through SCHED) and after sched_init.
         if !unsafe { ffi::sched_fork(handle(parent), handle(child)) } {
             return None;
         }
+        // SAFETY: the 4BSD C state is only touched while the scheduler lock is held (all callers go through SCHED) and after sched_init.
         if unsafe { ffi::sched_resched_pending() } {
             self.need_resched = true;
         }
         if let Some(st) = &stack {
+            // SAFETY: the 4BSD C state is only touched while the scheduler lock is held (all callers go through SCHED) and after sched_init.
             let ok = unsafe {
                 ffi::sched_set_thread_context(handle(child), st.top() as *mut c_void, thread_entry, handle(child))
             };
             if !ok {
+                // SAFETY: the 4BSD C state is only touched while the scheduler lock is held (all callers go through SCHED) and after sched_init.
                 unsafe { ffi::sched_exit(handle(child)) };
                 return None;
             }
@@ -409,11 +433,27 @@ impl Sched {
 
     fn sys_rfork(&mut self, flags: u64) -> i64 {
         let Some(me) = self.current else { return -1 };
+        if flags & !RF_ALL != 0
+            || (flags & RFNAMEG != 0 && flags & RFCNAMEG != 0)
+            || (flags & RFENVG != 0 && flags & RFCENVG != 0)
+            || (flags & RFFDG != 0 && flags & RFCFDG != 0)
+        {
+            self.set_errstr(me, "bad arg in system call");
+            return -1;
+        }
         if flags & RFPROC == 0 {
             if let Some(t) = self.thread(me) {
                 if flags & RFFDG != 0 {
                     let copy = t.fds.with(|f| f.clone());
                     t.fds = Arc::new(SpinLock::new(copy));
+                } else if flags & RFCFDG != 0 {
+                    t.fds = crate::io::new_table();
+                }
+                if flags & RFREND != 0 {
+                    t.rgrp = me;
+                }
+                if flags & RFNOTEG != 0 {
+                    t.ngrp = me;
                 }
                 if flags & RFCNAMEG != 0 {
                     t.ns = crate::ns::new_ns();
@@ -436,8 +476,11 @@ impl Sched {
                 let handler = self.threads.get(&me).map_or(0, |t| t.notes.handler);
                 let parent_fds = self.threads.get(&me).map(|t| t.fds.clone());
                 let parent_ns = self.threads.get(&me).map(|t| t.ns.clone());
+                let (prgrp, pngrp) = self.threads.get(&me).map_or((0, 0), |t| (t.rgrp, t.ngrp));
                 if let Some(t) = self.thread(child) {
                     t.notes.handler = handler;
+                    t.rgrp = if flags & RFREND != 0 { child } else { prgrp };
+                    t.ngrp = if flags & RFNOTEG != 0 { child } else { pngrp };
                     if let Some(ns) = parent_ns {
                         t.ns = if flags & RFCNAMEG != 0 {
                             crate::ns::new_ns()
@@ -450,6 +493,8 @@ impl Sched {
                     if let Some(fds) = parent_fds {
                         t.fds = if flags & RFFDG != 0 {
                             Arc::new(SpinLock::new(fds.with(|f| f.clone())))
+                        } else if flags & RFCFDG != 0 {
+                            crate::io::new_table()
                         } else {
                             fds
                         };
@@ -474,6 +519,7 @@ impl Sched {
     fn exit_current(&mut self, msg: String) -> i64 {
         let Some(me) = self.current else { return -1 };
         let failed = !msg.is_empty();
+        // SAFETY: the 4BSD C state is only touched while the scheduler lock is held (all callers go through SCHED) and after sched_init.
         unsafe { ffi::sched_exit(handle(me)) };
         if let Some(st) = self.thread(me).and_then(|t| t.stack.take()) {
             self.graveyard.push(st);
@@ -595,11 +641,12 @@ impl Sched {
 
     fn sys_rendezvous(&mut self, tag: u64, value: u64) -> i64 {
         let Some(me) = self.current else { return -1 };
-        if let Some((partner, theirs)) = self.rendezvous.remove(&tag) {
+        let key = (self.threads.get(&me).map_or(0, |t| t.rgrp), tag);
+        if let Some((partner, theirs)) = self.rendezvous.remove(&key) {
             self.wake(partner, value as i64);
             return theirs as i64;
         }
-        self.rendezvous.insert(tag, (me, value));
+        self.rendezvous.insert(key, (me, value));
         self.block_current(Wait::Rendezvous(tag));
         self.schedule();
         0
@@ -631,6 +678,21 @@ impl Sched {
             Ok(end) => if ret_end { end as i64 } else { 0 },
             Err(_) => -1,
         }
+    }
+
+    /// segbrk(saddr, addr): grow the segment containing `saddr`; only the heap may be resized.
+    fn sys_segbrk(&mut self, saddr: u64, addr: u64) -> i64 {
+        let Some(me) = self.current else { return -1 };
+        let Some(a) = self.aspace_of(me) else { return -1 };
+        let heap = saddr == 0
+            || a.with(|s| {
+                matches!(s.region_at(saddr), Some((_, _, crate::mm::aspace::Kind::Heap))) || saddr == s.brk_end()
+            });
+        if !heap {
+            self.set_errstr(me, "segbrk: not the heap segment");
+            return -1;
+        }
+        self.sys_brk(addr, true)
     }
 
     fn sys_errstr(&mut self, buf: u64, n: u64) -> i64 {
@@ -828,16 +890,29 @@ impl Sched {
             return Outcome::Dead;
         }
         match v {
-            NCONT => {
+            NCONT | NRSTR => {
+                let (va, fl) = if v == NRSTR {
+                    let Some(t) = self.threads.get(&me) else { return Outcome::Ret(-1) };
+                    (t.notes.sv_ureg_va, t.notes.sv_flags)
+                } else {
+                    (ureg_va, flags)
+                };
+                if v == NRSTR && va == 0 {
+                    self.set_errstr(me, "noted: no saved note frame");
+                    return Outcome::Ret(-1);
+                }
                 let mut raw = [0u8; uctx::UREG_SIZE];
-                let restored = if self.user_read(me, ureg_va, &mut raw) { Ureg::from_bytes(&raw) } else { None };
-                let restored = restored.map(|u| u.sanitized(flags)).filter(|u| {
+                let restored = if self.user_read(me, va, &mut raw) { Ureg::from_bytes(&raw) } else { None };
+                let restored = restored.map(|u| u.sanitized(fl)).filter(|u| {
                     self.aspace_of(me).is_some_and(|a| a.with(|s| code_ok(s, u.pc) && stack_ok(s, u.sp)))
                 });
                 match restored {
                     Some(u) => {
                         if let Some(t) = self.thread(me) {
                             t.notes.notified = false;
+                            if v == NRSTR {
+                                t.notes.sv_ureg_va = 0;
+                            }
                         }
                         *regs = u;
                         Outcome::Replaced
@@ -848,9 +923,15 @@ impl Sched {
                     }
                 }
             }
-            NSAVE | NRSTR => {
-                self.set_errstr(me, "noted: NSAVE/NRSTR not supported");
-                Outcome::Ret(-1)
+            NSAVE => {
+                // Keep the frame for noted(NRSTR) and leave the handler's note state so that
+                // further notes can be delivered meanwhile.
+                if let Some(t) = self.thread(me) {
+                    t.notes.sv_ureg_va = ureg_va;
+                    t.notes.sv_flags = flags;
+                    t.notes.notified = false;
+                }
+                Outcome::Ret(0)
             }
             _ => {
                 if let Some(t) = self.thread(me) {
@@ -900,6 +981,7 @@ impl Sched {
             if let Some(t) = self.thread(cur) {
                 t.cpu_ticks = t.cpu_ticks.saturating_add(1);
             }
+            // SAFETY: the 4BSD C state is only touched while the scheduler lock is held (all callers go through SCHED) and after sched_init.
             if unsafe { ffi::sched_tick(handle(cur)) } {
                 if let Some(t) = self.thread(cur) {
                     t.state = State::Ready;
@@ -908,6 +990,7 @@ impl Sched {
             }
         }
         if now % HZ == 0 {
+            // SAFETY: the 4BSD C state is only touched while the scheduler lock is held (all callers go through SCHED) and after sched_init.
             unsafe { ffi::sched_background_work() };
         }
         self.need_resched
@@ -933,6 +1016,7 @@ fn locked<R>(f: impl FnOnce(&mut Sched) -> R) -> R {
     });
     if let Some(PendingSwitch { sw, plan }) = sw {
         context::perform(plan);
+        // SAFETY: the 4BSD C state is only touched while the scheduler lock is held (all callers go through SCHED) and after sched_init.
         unsafe { ffi::sched_switch_run(&sw) };
     }
     crate::arch::irq_restore(irq);
@@ -945,8 +1029,10 @@ pub fn init() {
         let idle = s.idle_stack.take();
         *s = Sched::new();
         s.idle_stack = idle;
+        // SAFETY: the 4BSD C state is only touched while the scheduler lock is held (all callers go through SCHED) and after sched_init.
         unsafe { ffi::sched_init(HZ as core::ffi::c_int, 0) };
         s.threads.insert(BOOT_TID, Thread::new(0, State::Ready, false, None));
+        // SAFETY: the 4BSD C state is only touched while the scheduler lock is held (all callers go through SCHED) and after sched_init.
         if unsafe { ffi::sched_wakeup(handle(BOOT_TID)) } {
             s.schedule();
         }
@@ -1025,6 +1111,7 @@ pub fn start_switching() -> bool {
             return false;
         }
         let Some(stack) = Stack::alloc() else { return false };
+        // SAFETY: the 4BSD C state is only touched while the scheduler lock is held (all callers go through SCHED) and after sched_init.
         let ok = unsafe {
             ffi::sched_set_thread_context(null_mut(), stack.top() as *mut c_void, idle_entry, null_mut())
         };
@@ -1032,6 +1119,7 @@ pub fn start_switching() -> bool {
             return false;
         }
         s.idle_stack = Some(stack);
+        // SAFETY: the 4BSD C state is only touched while the scheduler lock is held (all callers go through SCHED) and after sched_init.
         unsafe { ffi::sched_set_context_switching(true) };
         SWITCHING.store(true, Ordering::Relaxed);
         true
@@ -1141,6 +1229,10 @@ pub fn sys_wait(buf: u64, n: u64) -> i64 {
 
 pub fn sys_alarm(ms: i64) -> i64 {
     SCHED.with(|s| s.sys_alarm(ms))
+}
+
+pub fn sys_segbrk(saddr: u64, addr: u64) -> i64 {
+    SCHED.with(|s| s.sys_segbrk(saddr, addr))
 }
 
 pub fn sys_brk(addr: u64, ret_end: bool) -> i64 {
@@ -1325,8 +1417,40 @@ fn exec_load(path: &str, mut args: Vec<Vec<u8>>) -> Result<(AddressSpace, Ureg),
         args.push(path.as_bytes().to_vec());
     }
 
-    let image = crate::io::read_image(path)?;
-
+    let mut path = String::from(path);
+    let mut hops = 0;
+    let image = loop {
+        let image = crate::io::read_image(&path)?;
+        if !image.starts_with(b"#!") {
+            break image;
+        }
+        // "#!interp [args...]": run interp with its arguments, then the script path, then the
+        // script's own arguments (argv[0] is replaced).
+        hops += 1;
+        if hops > 4 {
+            return Err(String::from("exec: too many #! levels"));
+        }
+        let end = match image.iter().take(256).position(|&b| b == b'\n') {
+            Some(i) => i,
+            None if image.len() <= 256 => image.len(),
+            None => return Err(String::from("exec: #! line too long")),
+        };
+        let words: Vec<Vec<u8>> = image[2..end]
+            .split(|&b| b == b' ' || b == b'\t' || b == b'\r')
+            .filter(|w| !w.is_empty())
+            .map(|w| w.to_vec())
+            .collect();
+        let interp = words.first().ok_or_else(|| String::from("exec: empty #! line"))?;
+        let interp = String::from_utf8(interp.clone()).map_err(|_| String::from("exec: bad #! interpreter"))?;
+        if !interp.starts_with('/') {
+            return Err(String::from("exec: #! interpreter must be an absolute path"));
+        }
+        let mut next = words;
+        next.push(path.as_bytes().to_vec());
+        next.extend(args.into_iter().skip(1));
+        args = next;
+        path = interp;
+    };
     let mut space = crate::mm::new_address_space().map_err(|_| String::from("exec: no address space"))?;
     let loaded = crate::elf::load(&mut space, &image).map_err(|e| String::from(e.msg()))?;
     drop(image);
@@ -1353,6 +1477,7 @@ pub fn sys_exec(path_ptr: u64, argv_ptr: u64) -> i64 {
             match old {
                 Some(old) => {
                     drop(old);
+                    crate::io::close_on_exec();
                     if let Some(p) = prog {
                         PNAMES.with(|n| {
                             n.insert(me, base_of(&p));
@@ -1395,6 +1520,7 @@ struct Launch {
 
 fn user_launcher(key: usize) {
     let result = {
+        // SAFETY: the pointer came from Box::into_raw on the matching spawn path and is consumed exactly once.
         let launch = unsafe { Box::from_raw(key as *mut Launch) };
         let argv: Vec<&str> = launch.args.iter().map(String::as_str).collect();
         exec_kernel(&launch.path, &argv)
@@ -1419,6 +1545,7 @@ pub fn spawn_user(path: &str, args: &[&str]) -> Option<Tid> {
         s.fork(parent, true, None, Some((user_launcher, key)))
     });
     if tid.is_none() {
+        // SAFETY: the pointer came from Box::into_raw on the matching spawn path and is consumed exactly once.
         drop(unsafe { Box::from_raw(key as *mut Launch) });
     }
     tid
@@ -1489,6 +1616,7 @@ pub fn fork_fpu(parent: Tid, child: Tid) {
         let Some(p) = s.thread(parent) else { return };
         let buf = p.fpu.get_or_insert_with(|| Box::new(Port::fpu_initial()));
         if live {
+            // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
             unsafe { Port::fpu_snapshot_current(buf) };
         }
         let copy = (**buf).clone();
@@ -1507,6 +1635,7 @@ pub fn reset_fpu_current() {
         let Some(t) = s.thread(me) else { return };
         let buf = t.fpu.get_or_insert_with(|| Box::new(Port::fpu_initial()));
         **buf = Port::fpu_initial();
+        // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
         unsafe { Port::fpu_reset_current(buf) };
     });
 }

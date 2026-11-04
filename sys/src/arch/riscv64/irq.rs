@@ -43,6 +43,7 @@ static STRAY: AtomicU32 = AtomicU32::new(0);
 
 fn sbi(eid: u64, fid: u64, a0: u64) -> (i64, u64) {
     let (err, val): (i64, u64);
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe {
         asm!("ecall", in("a7") eid, in("a6") fid, inlateout("a0") a0 => err, lateout("a1") val,
              options(nostack));
@@ -54,17 +55,23 @@ fn set_timer(deadline: u64) {
     let _ = sbi(SBI_EXT_TIME, 0, deadline);
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn start(first_deadline: u64) -> bool {
     let (err, present) = sbi(SBI_EXT_BASE, SBI_BASE_PROBE, SBI_EXT_TIME);
     if err != 0 || present == 0 {
         return false;
     }
     set_timer(first_deadline);
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("csrs sie, {}", in(reg) STIE, options(nomem, nostack, preserves_flags)) };
     true
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn stop() {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("csrc sie, {}", in(reg) STIE, options(nomem, nostack, preserves_flags)) };
     set_timer(u64::MAX);
 }
@@ -88,6 +95,7 @@ pub fn timer_tick() {
 pub fn stray(code: u64) {
     STRAY.fetch_add(1, Ordering::Relaxed);
     if code < 64 {
+        // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
         unsafe { asm!("csrc sie, {}", in(reg) 1u64 << code, options(nomem, nostack, preserves_flags)) };
     }
 }

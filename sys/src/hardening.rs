@@ -29,9 +29,12 @@
  * the individual components or the root license documentation for details.
  */
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn early_init() {
     use crate::console::color::pass;
 
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { crate::console::init_serial() };
     crate::kprintln!("ifsy: hardening: serial console online {}", pass());
 
@@ -39,7 +42,9 @@ pub unsafe fn early_init() {
     crate::kprintln!("ifsy: hardening: interrupts masked {}", pass());
     crate::kprintln!("ifsy: hardening: overflow checks + panic=abort active (compiled in) {}", pass());
 
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { crate::arch::init_protection() };
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { crate::arch::init_traps() };
     crate::kprintln!("ifsy: hardening: early_init complete {}", pass());
 }

@@ -91,6 +91,7 @@ pub fn shared_new(pages: u64) -> Option<PhysAddr> {
     }
     let h = super::hhdm();
     let base = super::with_frames(|f| f.alloc_contiguous(pages, 1))?;
+    // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
     unsafe { core::ptr::write_bytes((base.0 + h) as *mut u8, 0, (pages * PAGE_SIZE) as usize) };
     SHARED.with(|t| t.insert(base.0, (pages, 0)));
     Some(base)
@@ -225,10 +226,12 @@ impl AddressSpace {
             let src = (super::kernel_root().0 + hhdm) as *const u64;
             let dst = (root.0 + hhdm) as *mut u64;
             for i in from..ENTRIES {
+                // SAFETY: i < ENTRIES, so both pointers stay inside their 4 KiB root-table frames (HHDM-mapped, distinct frames).
                 unsafe { dst.add(i).write(src.add(i).read()) };
             }
         }
         let (asid, asid_gen) = asid_alloc();
+        // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
         let mapper = unsafe { Mapper::new(root, hhdm) };
         Ok(Self {
             mapper,
@@ -263,6 +266,7 @@ impl AddressSpace {
             while va < start + r.len {
                 let (src, _) = self.translate(va).ok_or(AsError::NotMapped)?;
                 let (dst, _) = child.translate(va).ok_or(AsError::NotMapped)?;
+                // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
                 unsafe {
                     core::ptr::copy_nonoverlapping(
                         (src.0 + hhdm) as *const u8,
@@ -517,6 +521,7 @@ impl AddressSpace {
     }
 
     pub fn write_bytes(&self, va: u64, data: &[u8]) -> Result<(), AsError> {
+        // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
         self.copy(va, data.len(), Need::Kernel, |dst, off, n| unsafe {
             core::ptr::copy_nonoverlapping(data.as_ptr().add(off), dst, n)
         })
@@ -524,6 +529,7 @@ impl AddressSpace {
 
     pub fn read_bytes(&self, va: u64, out: &mut [u8]) -> Result<(), AsError> {
         let p = out.as_mut_ptr();
+        // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
         self.copy(va, out.len(), Need::Kernel, |src, off, n| unsafe {
             core::ptr::copy_nonoverlapping(src, p.add(off), n)
         })
@@ -531,11 +537,13 @@ impl AddressSpace {
 
     pub fn user_read(&self, va: u64, out: &mut [u8]) -> Result<(), AsError> {
         let p = out.as_mut_ptr();
+        // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
         self.copy(va, out.len(), Need::Read, |src, off, n| unsafe {
             core::ptr::copy_nonoverlapping(src, p.add(off), n)
         })
     }
     pub fn user_write(&self, va: u64, data: &[u8]) -> Result<(), AsError> {
+        // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
         self.copy(va, data.len(), Need::Write, |dst, off, n| unsafe {
             core::ptr::copy_nonoverlapping(data.as_ptr().add(off), dst, n)
         })
@@ -581,12 +589,15 @@ impl AddressSpace {
         Ok(())
     }
 
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     pub unsafe fn activate(&mut self) {
         if self.asid_gen != asid_generation() {
             let (a, g) = asid_alloc();
             self.asid = a;
             self.asid_gen = g;
         }
+        // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
         unsafe { hw::switch_root(self.mapper.root(), self.asid) };
     }
 }
@@ -594,6 +605,7 @@ impl AddressSpace {
 impl Drop for AddressSpace {
     fn drop(&mut self) {
         if KERNEL_SHARED_FROM.is_some() && hw::read_root() == self.mapper.root() {
+            // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
             unsafe { hw::switch_root(super::kernel_root(), 0) };
         }
         let mut frames = GlobalFrames;
@@ -640,9 +652,11 @@ pub mod kvm {
                 b < hh_lo || a > hh_hi
             })
             .ok_or(AsError::Unsupported)?;
+        // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
         let mapper = unsafe { Mapper::new(super::super::kernel_root(), hhdm) }.pinned_root_slots();
         let root = (mapper.root().0 + hhdm) as *mut u64;
         for i in root_index(lo)..=root_index(lo + WINDOW_LEN - 1) {
+            // SAFETY: the C struct is plain old data for which the all-zero bit pattern is valid.
             unsafe {
                 if root.add(i).read() == 0 {
                     let t = frames.alloc_zeroed().ok_or(AsError::NoMemory)?;

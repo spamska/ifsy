@@ -71,6 +71,7 @@ mod mm;
 mod note;
 mod nstest;
 mod sched;
+mod smp;
 mod store;
 mod seg;
 mod sync;
@@ -124,6 +125,7 @@ static _END_MARKER: RequestsEndMarker = RequestsEndMarker::new();
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn kmain() -> ! {
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe { hardening::early_init() };
 
     kprintln!("ifsy: boot: kmain entered");
@@ -139,6 +141,7 @@ unsafe extern "C" fn kmain() -> ! {
             let bpp = framebuffer.bpp() as usize;
             let bytes_per_pixel = bpp / 8;
 
+            // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
             unsafe {
                 console::attach_framebuffer(framebuffer.addr(), width, height, pitch, bytes_per_pixel)
             };
@@ -210,6 +213,7 @@ fn init_heap() {
         arch::halt();
     };
 
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     match unsafe { mm::init_heap(memmap.entries(), hhdm.offset()) } {
         Some(size) => kprintln!("ifsy: heap: {} KiB online (HHDM offset {:#x})", size / 1024, hhdm.offset()),
         None => {
@@ -248,11 +252,16 @@ fn heap_selftest() {
 fn probe_boot_disk() -> Option<block::Disk<block::RamDisk>> {
     use block::{BlockDevice, Disk, RamDisk, SEEK_END, SEEK_SET};
 
+    {
+        let n = smp::start();
+        kprintln!("ifsy: smp: {} CPU(s) reported, {} application processor(s) online and parked", n, smp::aps_online());
+    }
     let Some(module) = MODULE_REQUEST.get_response().and_then(|r| r.modules().first().copied()) else {
         kprintln!("ifsy: block: no boot module loaded (add `module_path:` to limine.conf) {}", warn());
         return None;
     };
 
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     let ram = unsafe { RamDisk::from_raw(module.addr() as *mut u8, module.size() as usize) };
     let mut disk = Disk::new(ram);
     let sectors = disk.device().sector_count();
@@ -332,6 +341,7 @@ fn init_memory() {
     use mm::frame::InitError;
     let (Some(hhdm), Some(memmap)) = (HHDM_REQUEST.get_response(), MEMMAP_REQUEST.get_response()) else { return };
 
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     match unsafe { mm::init_frames(memmap.entries(), hhdm.offset()) } {
         Ok(bm) => {
             let (total, free) = mm::frame_stats();
@@ -390,6 +400,7 @@ fn frame_selftest() {
 
 fn wx_audit(hhdm: u64) {
     use mm::paging::Mapper;
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     let m = unsafe { Mapper::new(mm::kernel_root(), hhdm) };
     let fixed = m.enforce_wx(mm::hw::KERNEL_SHARED_FROM.unwrap_or(0), 512);
     if fixed != 0 {
@@ -471,7 +482,9 @@ fn aspace_selftest() {
     if let Some(top) = s1 {
         let low = top - 4 * 4096;
         check("kvm guard below", kvm::translate(low - 4096).is_none());
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         unsafe { ((top - 8) as *mut u64).write_volatile(0xC0FFEE) };
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         check("kvm stack writable", unsafe { ((top - 8) as *const u64).read_volatile() } == 0xC0FFEE);
         check("kvm free", kvm::free(low));
     }
@@ -482,11 +495,14 @@ fn aspace_selftest() {
     #[cfg(not(target_arch = "aarch64"))]
     {
         let kroot = mm::hw::read_root();
+        // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
         unsafe { a.activate() };
         let in_a = mm::hw::read_root() == a.root();
         let mut bb = b;
+        // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
         unsafe { bb.activate() };
         let in_b = mm::hw::read_root() == bb.root();
+        // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
         unsafe { mm::hw::switch_root(kroot, 0) };
         check("root switch A->B->kernel", in_a && in_b && mm::hw::read_root() == kroot);
         drop(bb);

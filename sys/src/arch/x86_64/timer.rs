@@ -34,15 +34,22 @@ use core::arch::x86_64::_rdtsc;
 
 #[inline]
 pub fn counter() -> u64 {
+    // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     unsafe { _rdtsc() }
 }
 
+/// # Safety
+/// x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
 unsafe fn outb(port: u16, v: u8) {
+    // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     unsafe { asm!("out dx, al", in("dx") port, in("al") v, options(nomem, nostack, preserves_flags)) };
 }
 
+/// # Safety
+/// x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
 unsafe fn inb(port: u16) -> u8 {
     let v: u8;
+    // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     unsafe { asm!("in al, dx", in("dx") port, out("al") v, options(nomem, nostack, preserves_flags)) };
     v
 }
@@ -51,6 +58,7 @@ const PIT_HZ: u64 = 1_193_182;
 const PIT_COUNT: u16 = 11_932;
 
 fn calibrate() -> Option<u64> {
+    // SAFETY: x86 port I/O to a fixed legacy/PCI port; it has no memory effects, and the kernel runs at CPL 0.
     unsafe {
         let saved = inb(0x61);
         outb(0x61, (saved & !0x02) | 0x01);

@@ -36,23 +36,27 @@ use core::arch::asm;
 
 pub fn kernel_root() -> PhysAddr {
     let v: u64;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("mrs {}, ttbr1_el1", out(reg) v, options(nomem, nostack, preserves_flags)) };
     PhysAddr(v & 0x0000_ffff_ffff_f000)
 }
 
 pub fn translation_ok() -> bool {
     let tcr: u64;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("mrs {}, tcr_el1", out(reg) tcr, options(nomem, nostack, preserves_flags)) };
     (tcr >> 16) & 0x3f == 16 && (tcr >> 30) & 3 == 0b10
 }
 
 pub fn publish() {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("dsb ishst", "isb", options(nostack, preserves_flags)) };
 }
 
 pub const ASID_BITS: u32 = 8;
 
 pub fn flush_page(virt: VirtAddr) {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe {
         asm!(
             "dsb ishst",
@@ -66,26 +70,33 @@ pub fn flush_page(virt: VirtAddr) {
 }
 
 pub fn flush_all() {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("dsb ishst", "tlbi vmalle1is", "dsb ish", "isb", options(nostack, preserves_flags)) };
 }
 
 pub fn read_root() -> PhysAddr {
     let v: u64;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("mrs {}, ttbr0_el1", out(reg) v, options(nomem, nostack, preserves_flags)) };
     PhysAddr(v & 0x0000_ffff_ffff_f000)
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn switch_root(root: PhysAddr, asid: u16) {
     let v = root.0 | ((asid as u64) << 48);
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("msr ttbr0_el1, {}", "isb", in(reg) v, options(nostack, preserves_flags)) };
 }
 
 pub fn entropy() -> (u64, bool) {
     let isar0: u64;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("mrs {}, id_aa64isar0_el1", out(reg) isar0, options(nomem, nostack, preserves_flags)) };
     if (isar0 >> 60) & 0xf != 0 {
         for _ in 0..10 {
             let (v, nzcv): (u64, u64);
+            // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
             unsafe {
                 asm!("mrs {v}, s3_3_c2_c4_0", "mrs {f}, nzcv", v = out(reg) v, f = out(reg) nzcv,
                      options(nomem, nostack))
@@ -96,6 +107,7 @@ pub fn entropy() -> (u64, bool) {
         }
     }
     let t: u64;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("mrs {}, cntpct_el0", out(reg) t, options(nomem, nostack, preserves_flags)) };
     (t, false)
 }

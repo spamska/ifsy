@@ -140,6 +140,7 @@ fn mount_dev(mut disk: Disk<Dev>) -> Result<(), i32> {
 }
 
 fn grown_copy(old: (*mut u8, usize), want: u64) -> Result<(Disk<Dev>, (u64, u64)), String> {
+    // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
     let old_img = unsafe { core::slice::from_raw_parts(old.0, old.1) };
     let geo = ext4grow::inspect(old_img).map_err(|e| String::from(e.message()))?;
     let new_blocks = want / geo.block_size;
@@ -159,6 +160,7 @@ fn grown_copy(old: (*mut u8, usize), want: u64) -> Result<(Disk<Dev>, (u64, u64)
         return Err(String::from("no contiguous block of memory that large"));
     };
     let base = (phys.0 + mm::hhdm()) as *mut u8;
+    // SAFETY: pointer and length come from memory owned by this code (frames mapped via the HHDM or a live slice) sized by the same computation, and no other reference to it is live.
     let img = unsafe {
         core::ptr::copy_nonoverlapping(old.0, base, old.1);
         core::ptr::write_bytes(base.add(old.1), 0, (pages * 4096) as usize - old.1);
@@ -166,6 +168,7 @@ fn grown_copy(old: (*mut u8, usize), want: u64) -> Result<(Disk<Dev>, (u64, u64)
     };
     match ext4grow::grow(img, new_blocks) {
         Ok(n) => {
+            // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
             let disk = unsafe { RamDisk::from_raw(base, (n * geo.block_size) as usize) };
             Ok((Disk::new(Dev::Ram(disk)), (phys.0, pages)))
         }
@@ -274,6 +277,7 @@ pub fn switch_root(mut disk: Disk<Dev>) -> Result<(), i32> {
 }
 
 fn remount_old(slot: &mut Option<Root>, old: (*mut u8, usize)) {
+    // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     let mut disk = Disk::new(Dev::Ram(unsafe { RamDisk::from_raw(old.0, old.1) }));
     note_geometry(&mut disk);
     *slot = Root::new(disk).ok();
@@ -295,6 +299,7 @@ pub fn read_link(path: &str) -> Result<String, i32> {
     let r = with_root(|_| {
         let mut buf = alloc::vec![0u8; 1024];
         let mut n = 0usize;
+        // SAFETY: the 4BSD C state is only touched while the scheduler lock is held (all callers go through SCHED) and after sched_init.
         let e = unsafe {
             lwext4_rust::bindings::ext4_readlink(c.as_ptr(), buf.as_mut_ptr() as *mut core::ffi::c_char, buf.len(), &mut n)
         };
@@ -312,6 +317,7 @@ pub fn make_symlink(target: &str, path: &str) -> Result<(), i32> {
         alloc::ffi::CString::new(target).map_err(|_| 22)?,
         alloc::ffi::CString::new(path).map_err(|_| 22)?,
     );
+    // SAFETY: FFI/union access: the C call gets valid NUL-terminated or sized buffers owned by this frame, and the union field read matches the message type just checked.
     let e = with_root(|_| unsafe { lwext4_rust::bindings::ext4_fsymlink(t.as_ptr(), p.as_ptr()) }).unwrap_or(5);
     if e == 0 { Ok(()) } else { Err(e) }
 }

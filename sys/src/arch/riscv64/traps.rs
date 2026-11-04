@@ -102,14 +102,18 @@ impl TrapFrame {
     }
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn enter_user(regs: &Ureg) -> ! {
     super::mask_interrupts();
     let mut frame = TrapFrame::zeroed();
     frame.load_ureg(regs);
     let mut fp = [0u64; 33];
+    // SAFETY: architecture-specific privileged or MMIO access at kernel privilege, performed in the init order established by kmain.
     unsafe { riscv_fpu_save(fp.as_mut_ptr()) };
     frame.f.copy_from_slice(&fp[..32]);
     frame.fcsr = fp[32];
+    // SAFETY: architecture-specific privileged or MMIO access at kernel privilege, performed in the init order established by kmain.
     unsafe { riscv_enter_frame(&frame) }
 }
 
@@ -227,6 +231,7 @@ fn exception_name(code: u64) -> &'static str {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn riscv_trap_common() -> ! {
     let (cause, tval, epc): (u64, u64, u64);
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe {
         asm!("csrr {}, scause", out(reg) cause, options(nomem, nostack, preserves_flags));
         asm!("csrr {}, stval", out(reg) tval, options(nomem, nostack, preserves_flags));
@@ -246,8 +251,11 @@ unsafe extern "C" fn riscv_trap_common() -> ! {
     crate::arch::halt();
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn init() {
     let entry = riscv_trap_entry as usize as u64;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe {
         asm!("csrw stvec, {}", in(reg) entry, options(nostack, preserves_flags));
         asm!("csrw sscratch, zero", options(nostack, preserves_flags));

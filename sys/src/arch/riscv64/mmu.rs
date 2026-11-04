@@ -43,35 +43,44 @@ pub fn kernel_root() -> PhysAddr {
 
 pub fn translation_ok() -> bool {
     let v: u64;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("csrr {}, satp", out(reg) v, options(nomem, nostack, preserves_flags)) };
     v >> 60 == 9
 }
 
 pub fn publish() {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("fence rw, rw", options(nostack, preserves_flags)) };
 }
 
 pub fn flush_page(virt: VirtAddr) {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("sfence.vma {}, zero", in(reg) virt.0, options(nostack, preserves_flags)) };
 }
 
 pub fn flush_all() {
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("sfence.vma zero, zero", options(nostack, preserves_flags)) };
 }
 
 pub fn read_root() -> PhysAddr {
     let v: u64;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("csrr {}, satp", out(reg) v, options(nomem, nostack, preserves_flags)) };
     PhysAddr((v & 0x0000_0fff_ffff_ffff) << 12)
 }
 
+/// # Safety
+/// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
 pub unsafe fn switch_root(root: PhysAddr, asid: u16) {
     let satp = SATP_SV48 | ((asid as u64) << 44) | (root.0 >> 12);
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("csrw satp, {}", "sfence.vma zero, zero", in(reg) satp, options(nostack)) };
 }
 
 pub fn entropy() -> (u64, bool) {
     let t: u64;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe { asm!("rdtime {}", out(reg) t, options(nomem, nostack, preserves_flags)) };
     (t, false)
 }

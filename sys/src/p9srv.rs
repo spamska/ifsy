@@ -143,6 +143,7 @@ fn handle(srv: &mut Srv, msg: &mut [u8]) -> Vec<u8> {
         return rerror(p9fcall::NOTAG, "bad message");
     }
     let tag = f.tag;
+    // SAFETY: FFI/union access: the C call gets valid NUL-terminated or sized buffers owned by this frame, and the union field read matches the message type just checked.
     unsafe {
         match f.typ {
             p9fcall::TVERSION => {

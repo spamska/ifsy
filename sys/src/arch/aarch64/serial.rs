@@ -55,8 +55,11 @@ const DESC_UXN: u64 = 1 << 54;
 const ATTR_DEVICE_IDX: u64 = 2;
 const PA_MASK: u64 = 0x0000_ffff_ffff_f000;
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn virt_to_phys(va: u64) -> u64 {
     let par: u64;
+    // SAFETY: privileged register/instruction; this code runs only at kernel privilege and the architectural effect (translation, interrupt or FPU state) is what the surrounding code intends.
     unsafe {
         asm!(
             "at s1e1r, {va}",
@@ -70,10 +73,13 @@ unsafe fn virt_to_phys(va: u64) -> u64 {
     (par & PA_MASK) | (va & 0xfff)
 }
 
+/// # Safety
+/// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
 unsafe fn map_device_mmio() {
     let Some(hhdm) = crate::HHDM_REQUEST.get_response().map(|r| r.offset()) else {
         super::halt();
     };
+    // SAFETY: MMIO/port/DMA access to the device this driver probed: addresses are its mapped register window or DMA pages allocated here, offsets are constants inside them, and the driver has exclusive access (&mut self).
     unsafe {
         let l1 = (&raw mut MMIO_L1) as *mut u64;
         let empty = (&raw mut EMPTY_L0) as *mut u64;
@@ -115,17 +121,21 @@ unsafe fn map_device_mmio() {
 pub struct SerialPort;
 
 impl SerialPort {
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     pub unsafe fn init() -> Self {
         unsafe { map_device_mmio() };
         Self
     }
 
     fn flags(&self) -> u32 {
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         unsafe { core::ptr::read_volatile(UARTFR as *const u32) }
     }
 
     pub fn write_byte(&mut self, byte: u8) {
         while self.flags() & UARTFR_TXFF != 0 {}
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         unsafe { core::ptr::write_volatile(UARTDR as *mut u32, byte as u32) };
     }
 
@@ -133,6 +143,7 @@ impl SerialPort {
         if self.flags() & UARTFR_RXFE != 0 {
             return None;
         }
+        // SAFETY: the address is a device register or ring/DMA slot mapped by this driver's init and aligned for the access width; volatile stops the compiler eliding or tearing the access.
         Some(unsafe { core::ptr::read_volatile(UARTDR as *const u32) } as u8)
     }
 }

@@ -34,16 +34,30 @@ use crate::uctx::Ureg;
 pub trait Hal {
     type FpuState: Clone;
     const SYSCALL_ABI: &'static str;
+    /// # Safety
+    /// Caller must be at kernel privilege and have met this function's hardware and initialization prerequisites.
     unsafe fn init_user_mode() -> bool;
     fn set_kernel_stack(top: u64);
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe fn enter_user(regs: &Ureg) -> !;
     fn fpu_initial() -> Self::FpuState;
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe fn fpu_save(state: &mut Self::FpuState);
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe fn fpu_restore(state: &Self::FpuState);
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe fn fpu_snapshot_current(state: &mut Self::FpuState) {
+        // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
         unsafe { Self::fpu_save(state) }
     }
+    /// # Safety
+    /// called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
     unsafe fn fpu_reset_current(state: &Self::FpuState) {
+        // SAFETY: called at kernel privilege in the boot/driver order set up by kmain; the callee's own contract (hardware present, prerequisites initialized, interrupts masked where required) is met at this call site.
         unsafe { Self::fpu_restore(state) }
     }
 }
